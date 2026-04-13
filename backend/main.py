@@ -538,17 +538,7 @@ def load_catalogs() -> dict[str, dict]:
                 source_store[source_key] = _build_source_store(excel_catalog)
                 continue
 
-        if cache_path:
-            cache_catalog = _load_catalog_from_cache(
-                cache_path=cache_path,
-                source_key=source_key,
-                source_label=config["label"],
-            )
-            if cache_catalog:
-                print(f"[catalog:{source_key}] loaded {len(cache_catalog)} products from {cache_path.name}")
-                source_store[source_key] = _build_source_store(cache_catalog)
-                continue
-
+        # Prefer explicit products fallback before cache to avoid stale partial caches in deployment.
         fallback_loaded = False
         for products_path in FALLBACK_PRODUCTS_PATHS:
             fallback_catalog = _load_catalog_from_products_file(
@@ -563,6 +553,17 @@ def load_catalogs() -> dict[str, dict]:
                 break
         if fallback_loaded:
             continue
+
+        if cache_path:
+            cache_catalog = _load_catalog_from_cache(
+                cache_path=cache_path,
+                source_key=source_key,
+                source_label=config["label"],
+            )
+            if cache_catalog:
+                print(f"[catalog:{source_key}] loaded {len(cache_catalog)} products from {cache_path.name}")
+                source_store[source_key] = _build_source_store(cache_catalog)
+                continue
 
         print(f"[catalog:{source_key}] excel not found or empty at {excel_path}")
         source_store[source_key] = _build_source_store([])
