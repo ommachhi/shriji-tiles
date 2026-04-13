@@ -56,6 +56,7 @@ CATALOG_SOURCES = {
 }
 
 FALLBACK_PRODUCTS_PATHS = [
+    BASE_DIR / "products_complete.json",
     BASE_DIR / "products.json",
 ]
 
