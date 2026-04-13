@@ -1,0 +1,80 @@
+{
+  "name": "catalog-quotation-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Electron desktop wrapper for the catalog search and quotation system",
+  "main": "main.js",
+  "scripts": {
+    "dev:frontend": "npm --prefix ../frontend start",
+    "dev:desktop": "cross-env ELECTRON_START_URL=http://localhost:3000 electron .",
+    "dev": "concurrently -k \"npm run dev:frontend\" \"npm run dev:desktop\"",
+    "build:frontend": "npm --prefix ../frontend run build",
+    "build:backend": "powershell -ExecutionPolicy Bypass -File .\\scripts\\build-backend.ps1",
+    "dist": "npm run build:frontend && npm run build:backend && electron-builder --win nsis portable",
+    "make:exe": "npm run dist"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "cross-env": "^7.0.3",
+    "electron": "^37.2.3",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.tejeshkp.catalogquotationdesktop",
+    "productName": "Catalog Quotation Desktop",
+    "asar": true,
+    "npmRebuild": false,
+    "nodeGypRebuild": false,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "loading.html",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../frontend/build",
+        "to": "frontend-build",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../backend/dist/ProductCatalogBackend",
+        "to": "backend",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "${productName}-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "${productName}-Portable-${version}.${ext}"
+    }
+  }
+}

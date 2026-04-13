@@ -1,0 +1,52 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Python
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.venv/
+**/venv/
+**/.env
+**/.env.*
+
+# Node
+**/node_modules/
+**/npm-debug.log*
+**/yarn-debug.log*
+**/yarn-error.log*
+
+# Build artifacts
+backend/build/
+backend/dist/
+backend/programfiles_backup/
+desktop/release/
+frontend/build/
+
+# Runtime/generated files
+backend/*.log
+backend/*.out
+backend/*.err
+backend/*_report.json
+backend/inspection_report_utf8.txt
+backend/inspect_output.txt
+backend/images_out.txt
+backend/images_output.txt
+backend/page58_render.png
+
+# Large generated catalog assets (regenerate locally)
+backend/images/
+backend/*.xlsx
+backend/catalog_cache.json
+backend/kohler_cache.json
+backend/kohler_test_cache.json
+
+# Archives/binaries
+**/*.zip
+**/*.exe
+**/*.msi
