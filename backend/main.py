@@ -147,6 +147,43 @@ def _versioned_image_path(image_name: str) -> str:
     return f"/images/{relative_path.replace('\\', '/')}{version_suffix}"
 
 
+def _build_image_lookup() -> dict[str, list[tuple[str, str]]]:
+    lookup: dict[str, list[tuple[str, str]]] = {"aquant": [], "kohler": []}
+    seen: dict[str, set[str]] = {"aquant": set(), "kohler": set()}
+
+    for images_dir in _candidate_images_dirs():
+        for path in images_dir.rglob("*.png"):
+            try:
+                relative = path.relative_to(images_dir).as_posix()
+            except ValueError:
+                continue
+
+            source_key = "kohler" if relative.startswith("Kohler/") else "aquant"
+            if relative in seen[source_key]:
+                continue
+            seen[source_key].add(relative)
+            lookup[source_key].append((normalize_code(path.stem), relative))
+
+    for source_key in lookup:
+        lookup[source_key].sort(key=lambda item: (len(item[0]), item[1]))
+    return lookup
+
+
+IMAGE_LOOKUP = _build_image_lookup()
+
+
+def _fallback_image_by_code(code: str, source_key: str) -> str | None:
+    compact_code = normalize_code(code)
+    if not compact_code:
+        return None
+
+    source_images = IMAGE_LOOKUP.get(source_key, [])
+    for stem_compact, relative in source_images:
+        if stem_compact.startswith(compact_code):
+            return relative
+    return None
+
+
 def _image_name_from_code(code: str) -> str:
     value = re.sub(r"\s*([+/\-])\s*", r"\1", str(code or "").strip().upper())
     value = value.replace("\\", "/")
@@ -990,21 +1027,33 @@ def _serialize_product(request: Request, product: dict) -> dict:
     if source_key == "kohler" and compact_code_value in KOHLER_NO_IMAGE_CODES:
         image = None
     else:
-        expected_image_file = _image_name_from_code(code_value)
         image = None
 
-        if expected_image_file:
-            if source_key == "kohler":
-                kohler_relative = f"Kohler/{expected_image_file}"
-                expected_image_path = _resolve_existing_image_path(kohler_relative)
-                if expected_image_path:
-                    image = f"/images/{kohler_relative}"
+        raw_product_image = str(product.get("image") or "").strip()
+        if raw_product_image:
+            relative = image_relative_path(raw_product_image)
+            if source_key == "kohler" and relative and not relative.startswith("Kohler/"):
+                relative = f"Kohler/{relative}"
+            if relative and _resolve_existing_image_path(relative):
+                image = f"/images/{relative}"
+
+        if not image:
+            expected_image_file = _image_name_from_code(code_value)
+            if expected_image_file:
+                if source_key == "kohler":
+                    kohler_relative = f"Kohler/{expected_image_file}"
+                    expected_image_path = _resolve_existing_image_path(kohler_relative)
+                    if expected_image_path:
+                        image = f"/images/{kohler_relative}"
                 else:
-                    image = None
-            else:
-                expected_image_path = _resolve_existing_image_path(expected_image_file)
-                if expected_image_path:
-                    image = f"/images/{expected_image_file}"
+                    expected_image_path = _resolve_existing_image_path(expected_image_file)
+                    if expected_image_path:
+                        image = f"/images/{expected_image_file}"
+
+        if not image:
+            fallback_relative = _fallback_image_by_code(code_value, source_key)
+            if fallback_relative and _resolve_existing_image_path(fallback_relative):
+                image = f"/images/{fallback_relative}"
 
         if image and str(image).startswith("/"):
             relative_image = str(image).split("?", 1)[0]
