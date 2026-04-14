@@ -486,15 +486,19 @@ def _load_catalog_from_products_file(products_path: Path, source_key: str, sourc
         return []
 
     catalog: list[dict] = []
-    seen_codes = set()
+    seen_rows = set()
 
     for item in data:
         if not isinstance(item, dict):
             continue
 
-        source_value = str(item.get("source", source_key)).strip().lower() or source_key
-        if item.get("source") and source_value != source_key:
+        explicit_source = str(item.get("source", "")).strip().lower()
+        if explicit_source and explicit_source != source_key:
             continue
+        if not explicit_source and source_key != "aquant":
+            # Legacy source-less fallback files are Aquant-only; don't mirror into Kohler.
+            continue
+        source_value = explicit_source or "aquant"
 
         code = str(item.get("code", "")).strip()
         name = str(item.get("name") or item.get("product_name") or "").strip()
@@ -502,11 +506,6 @@ def _load_catalog_from_products_file(products_path: Path, source_key: str, sourc
             continue
         if not name:
             name = code
-
-        compact_code = normalize_code(code)
-        if not compact_code or compact_code in seen_codes:
-            continue
-        seen_codes.add(compact_code)
 
         try:
             price = int(float(item.get("price", 0) or 0))
@@ -522,6 +521,7 @@ def _load_catalog_from_products_file(products_path: Path, source_key: str, sourc
                 variant_value = parsed_variant
 
         color = str(item.get("color") or item.get("finish") or "").strip() or None
+        size_value = str(item.get("size", "")).strip() or None
         if not variant_value and color:
             inferred_variant = _infer_variant_from_color(color)
             if inferred_variant:
@@ -544,6 +544,19 @@ def _load_catalog_from_products_file(products_path: Path, source_key: str, sourc
         details = str(item.get("details") or name).strip() or name
         source_label_value = str(item.get("source_label") or item.get("sourceLabel") or source_label).strip() or source_label
 
+        dedupe_key = (
+            normalize_code(code),
+            normalize_text(name),
+            normalize_text(details),
+            normalize_text(color or ""),
+            normalize_text(size_value or ""),
+            normalize_code(variant_value),
+            str(price),
+        )
+        if dedupe_key in seen_rows:
+            continue
+        seen_rows.add(dedupe_key)
+
         catalog.append(
             {
                 "source": source_value,
@@ -552,7 +565,7 @@ def _load_catalog_from_products_file(products_path: Path, source_key: str, sourc
                 "name": name,
                 "price": price,
                 "color": color,
-                "size": str(item.get("size", "")).strip() or None,
+                "size": size_value,
                 "details": details,
                 "page_number": page_number,
                 "image": image_value,

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-from extractor import normalize_code, normalize_text, DEFAULT_IMAGES_DIR, image_relative_path
+from extractor import image_relative_path
 
 
 def export_excel_to_json(excel_path: Path, source_key: str, source_label: str) -> list[dict]:
@@ -17,44 +17,80 @@ def export_excel_to_json(excel_path: Path, source_key: str, source_label: str) -
         return products
     
     try:
-        wb = load_workbook(excel_path, data_only=True)
+        wb = load_workbook(excel_path, data_only=True, read_only=True)
         ws = wb.active
-        
-        # Skip header row
-        for row_idx, row in enumerate(ws.iter_rows(values_only=True), start=1):
-            if row_idx == 1:  # Header
+
+        rows = ws.iter_rows(values_only=True)
+        header = next(rows, None)
+        if not header:
+            wb.close()
+            return products
+
+        fields = [str(value).strip().lower() if value is not None else "" for value in header]
+        index_map = {name: idx for idx, name in enumerate(fields) if name}
+
+        def _value(row: tuple, key: str, default=""):
+            idx = index_map.get(key)
+            if idx is None or idx >= len(row):
+                return default
+            value = row[idx]
+            return default if value is None else value
+
+        for row in rows:
+            if not row:
                 continue
-            
-            if not row or not row[0]:  # Empty row
-                continue
-            
-            code = str(row[0]).strip() if row[0] else ""
-            name = str(row[1]).strip() if row[1] else ""
-            price = row[2] if row[2] else 0
-            finish = str(row[3]).strip() if row[3] else ""
-            
+
+            code = str(_value(row, "code", "")).strip()
+            name = str(_value(row, "name", "")).strip()
             if not code:
                 continue
-            
-            # Build image filename
-            images_dir = Path(DEFAULT_IMAGES_DIR)
-            possible_image = images_dir / f"{normalize_code(code)}.png"
-            has_image = possible_image.exists()
+
+            try:
+                price = int(float(_value(row, "price", 0) or 0))
+            except (TypeError, ValueError):
+                price = 0
+
+            color = str(_value(row, "color", "")).strip() or None
+            size = str(_value(row, "size", "")).strip() or None
+            details = str(_value(row, "details", name)).strip() or name
+            variant = str(_value(row, "variant", "")).strip().upper() or None
+            base_code = str(_value(row, "base_code", "")).strip() or None
+
+            image_file = str(_value(row, "image_file", "")).strip()
+            image = str(_value(row, "image", "")).strip()
+            if image_file:
+                image = f"/images/{image_relative_path(image_file)}"
+            elif image:
+                image = f"/images/{image_relative_path(image)}"
+            else:
+                image = ""
+
+            raw_source = str(_value(row, "source", source_key)).strip().lower() or source_key
+            raw_label = str(_value(row, "source_label", source_label)).strip() or source_label
+
+            is_cp_raw = str(_value(row, "is_cp", "")).strip()
+            is_cp = is_cp_raw in {"1", "true", "True", "yes", "YES"} or variant == "CP"
             
             product = {
-                "code": normalize_code(code),
-                "name": normalize_text(name),
-                "price": price if isinstance(price, (int, float)) else 0,
-                "finish": normalize_text(finish),
-                "source": source_key,
-                "source_label": source_label,
+                "source": raw_source,
+                "source_label": raw_label,
+                "code": code,
+                "name": name,
+                "price": price,
+                "color": color,
+                "size": size,
+                "details": details,
+                "base_code": base_code,
+                "variant": variant,
+                "is_cp": is_cp,
             }
-            
-            if has_image:
-                product["image"] = image_relative_path(code, source_key)
+
+            if image:
+                product["image"] = image
             
             products.append(product)
         
+        wb.close()
         print(f"✓ Exported {len(products)} products from {excel_path.name}")
         return products
     
