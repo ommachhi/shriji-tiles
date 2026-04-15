@@ -1140,6 +1140,11 @@ def _image_only_query_results(query: str, source_key: str) -> list[dict]:
     if not compact_code:
         return []
 
+    source = SOURCE_STORE.get(source_key)
+    if source and source.get("exact", {}).get(compact_code):
+        # Prefer real catalog rows (with actual price/details) when they exist.
+        return []
+
     expected_image_file = _image_name_from_code(code_value)
     candidates = []
 
