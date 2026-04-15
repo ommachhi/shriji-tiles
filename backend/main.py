@@ -1136,13 +1136,24 @@ def _image_only_query_results(query: str, source_key: str) -> list[dict]:
     if not code_value:
         return []
 
+    compact_code = normalize_code(code_value)
+    if not compact_code:
+        return []
+
     expected_image_file = _image_name_from_code(code_value)
     candidates = []
 
     if expected_image_file:
         candidates.append(f"Kohler/{expected_image_file}" if source_key == "kohler" else expected_image_file)
 
-    fallback_relative = _fallback_image_by_code(code_value, source_key)
+    fallback_relative = next(
+        (
+            relative
+            for stem_compact, relative in IMAGE_LOOKUP.get(source_key, [])
+            if stem_compact == compact_code
+        ),
+        None,
+    )
     if fallback_relative:
         candidates.append(fallback_relative)
 
