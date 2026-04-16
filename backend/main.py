@@ -724,6 +724,11 @@ def _resolve_excel_path(excel_path: Path) -> Path:
 
 def load_catalogs() -> dict[str, dict]:
     source_store = {}
+    allow_kohler_products_fallback = os.environ.get("ENABLE_KOHLER_PRODUCTS_FALLBACK", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
 
     for source_key, config in CATALOG_SOURCES.items():
         excel_path = Path(config.get("excel_path", "")) if config.get("excel_path") else None
@@ -745,15 +750,17 @@ def load_catalogs() -> dict[str, dict]:
                     f"[catalog:{source_key}] ignoring suspicious excel dataset ({len(excel_catalog)}) from {excel_path.name}"
                 )
 
-        # Prefer explicit products fallback before cache to avoid stale partial caches in deployment.
-        for products_path in FALLBACK_PRODUCTS_PATHS:
-            fallback_catalog = _load_catalog_from_products_file(
-                products_path=products_path,
-                source_key=source_key,
-                source_label=config["label"],
-            )
-            if fallback_catalog:
-                candidates.append(("fallback", fallback_catalog, products_path.name))
+        # Products fallback can contain stale Kohler rows on deployment;
+        # keep it disabled for Kohler unless explicitly enabled.
+        if source_key != "kohler" or allow_kohler_products_fallback:
+            for products_path in FALLBACK_PRODUCTS_PATHS:
+                fallback_catalog = _load_catalog_from_products_file(
+                    products_path=products_path,
+                    source_key=source_key,
+                    source_label=config["label"],
+                )
+                if fallback_catalog:
+                    candidates.append(("fallback", fallback_catalog, products_path.name))
 
         if cache_path:
             cache_catalog = _load_catalog_from_cache(
@@ -769,7 +776,8 @@ def load_catalogs() -> dict[str, dict]:
             source_store[source_key] = _build_source_store([])
             continue
 
-        source_priority = {"fallback": 0, "excel": 1, "cache": 2}
+        # Prefer canonical sources first: cache, then excel, then legacy fallback.
+        source_priority = {"cache": 0, "excel": 1, "fallback": 2}
         candidates.sort(key=lambda item: (-len(item[1]), source_priority.get(item[0], 9), item[2]))
         selected_kind, selected_catalog, selected_origin = candidates[0]
         print(
