@@ -65,7 +65,17 @@ EXPLICIT_CODE_PRICE_PATTERN = re.compile(
     re.I,
 )
 
-KOHLER_CODE_PATTERN = re.compile(r"\b(K-[A-Z0-9-]+)\b", re.I)
+KOHLER_CODE_PATTERN = re.compile(
+    r"\b((?:K-\s*[A-Z0-9-]+|EX[0-9][A-Z0-9-]*))\b",
+    re.I,
+)
+SKU_CODE_PATTERN = re.compile(r"\bSKU\s*Code:\s*([A-Z0-9][A-Z0-9-]*)\b", re.I)
+
+
+def _kohler_codes_from_text(text: str) -> list[str]:
+    codes = [match.group(1) for match in KOHLER_CODE_PATTERN.finditer(text)]
+    codes.extend(match.group(1) for match in SKU_CODE_PATTERN.finditer(text))
+    return codes
 
 AQUANT_VARIANT_COLOR_MAP = {
     "CP": "Chrome",
@@ -970,7 +980,7 @@ def _is_kohler_category_block(block: dict) -> bool:
     x0, _, x1, _ = block["rect"]
     if x0 < 180 or x1 > 380:
         return False
-    if KOHLER_CODE_PATTERN.search(text) or PRICE_PATTERN.search(text):
+    if KOHLER_CODE_PATTERN.search(text) or SKU_CODE_PATTERN.search(text) or PRICE_PATTERN.search(text):
         return False
     if text.isdigit() or text == "MODEL DESCRIPTION CODE MRP":
         return False
@@ -1007,8 +1017,13 @@ def _extract_kohler_catalog(
             
             category_blocks = [b for b in blocks if _is_kohler_category_block(b)]
             model_name_blocks = [
-                b for b in blocks 
-                if b["rect"][0] <= 120 and not b["text"].isdigit() and b["text"] != "MODEL DESCRIPTION CODE MRP"
+                b for b in blocks
+                if not b["text"].isdigit()
+                and b["text"] != "MODEL DESCRIPTION CODE MRP"
+                and not re.match(r"^(Qty|Format|Usage Area|SKU Code|MRP)\b", b["text"], re.I)
+                and not KOHLER_CODE_PATTERN.search(b["text"])
+                and not SKU_CODE_PATTERN.search(b["text"])
+                and not PRICE_PATTERN.search(b["text"])
             ]
             
             price_blocks = []
@@ -1024,9 +1039,9 @@ def _extract_kohler_catalog(
             for b in blocks:
                 if b["text"].lower().startswith(("must order", "order with")):
                     continue
-                for m in KOHLER_CODE_PATTERN.finditer(b["text"]):
+                for code in _kohler_codes_from_text(b["text"]):
                     all_codes.append({
-                        "code": m.group(1),
+                        "code": code,
                         "block": b,
                         "rect": b["rect"],
                         "center_y": (b["rect"][1] + b["rect"][3]) / 2,
@@ -1038,13 +1053,14 @@ def _extract_kohler_catalog(
                 prev_p_y = price_blocks[i-1]["center_y"] if i > 0 else 0
                 
                 # 1) Prefer explicit codes in the same price block text.
-                same_block_codes = [m.group(1) for m in KOHLER_CODE_PATTERN.finditer(p_info["block"]["text"])]
+                same_block_codes = _kohler_codes_from_text(p_info["block"]["text"])
 
                 # 2) Otherwise collect nearby code group (supports multi-code per image).
                 nearby_codes = [
                     c for c in all_codes if prev_p_y - 10 <= c["center_y"] <= price_y + 15
                 ]
-                nearby_codes.sort(key=lambda c: (abs(c["center_y"] - price_y), c["center_x"]))
+                price_center_x = (p_info["block"]["rect"][0] + p_info["block"]["rect"][2]) / 2
+                nearby_codes.sort(key=lambda c: (abs(c["center_x"] - price_center_x), abs(c["center_y"] - price_y)))
 
                 selected_entries = []
                 if same_block_codes:
@@ -1062,7 +1078,7 @@ def _extract_kohler_catalog(
                         })
                 elif nearby_codes:
                     anchor = nearby_codes[0]
-                    anchor_block_codes = [m.group(1) for m in KOHLER_CODE_PATTERN.finditer(anchor["block"]["text"])]
+                    anchor_block_codes = _kohler_codes_from_text(anchor["block"]["text"])
                     if anchor_block_codes:
                         seen = set()
                         for code in anchor_block_codes:
@@ -1095,15 +1111,21 @@ def _extract_kohler_catalog(
                         
                 model_name = None
                 model_name_y = 0
+                model_name_score = None
                 for mb in model_name_blocks:
-                    if mb["rect"][1] <= price_y + 5:
-                        passed_cat = False
-                        for cb in category_blocks:
-                            if mb["rect"][1] < cb["rect"][1] < price_y:
-                                passed_cat = True
-                        if not passed_cat:
-                            model_name = mb["text"]
-                            model_name_y = mb["rect"][1]
+                    if mb["rect"][3] > price_y + 5:
+                        continue
+                    passed_cat = False
+                    for cb in category_blocks:
+                        if mb["rect"][1] < cb["rect"][1] < price_y:
+                            passed_cat = True
+                    if passed_cat:
+                        continue
+                    score = (abs(mb["rect"][0] - price_center_x), price_y - mb["rect"][3])
+                    if model_name_score is None or score < model_name_score:
+                        model_name = mb["text"]
+                        model_name_y = mb["rect"][1]
+                        model_name_score = score
                             
                 start_y = prev_p_y
                 for cb in category_blocks:
@@ -1123,15 +1145,17 @@ def _extract_kohler_catalog(
                             continue
                         if PRICE_PATTERN.search(b["text"]):
                             pre_price = b["text"][:PRICE_PATTERN.search(b["text"]).start()].strip()
-                            pre_price = re.sub(KOHLER_CODE_PATTERN, " ", pre_price).strip()
+                            pre_price = re.sub(KOHLER_CODE_PATTERN, " ", pre_price)
+                            pre_price = re.sub(SKU_CODE_PATTERN, " ", pre_price).strip()
                             if pre_price: desc_blocks.append(pre_price)
                             continue
-                        if _is_pure_code(b["text"]):
+                        if _is_pure_code(b["text"]) or SKU_CODE_PATTERN.search(b["text"]):
                             continue
                         desc_blocks.append(b["text"])
                         
                 combined_details = " ".join(desc_blocks)
                 combined_details = re.sub(KOHLER_CODE_PATTERN, " ", combined_details)
+                combined_details = re.sub(SKU_CODE_PATTERN, " ", combined_details)
                 combined_details = re.sub(r"\s{2,}", " ", combined_details).strip(" -:")
                 
                 if model_name:

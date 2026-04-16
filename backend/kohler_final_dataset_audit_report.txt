@@ -1,0 +1,87 @@
+KOHLER FINAL DATASET AUDIT REPORT
+========================================================================
+Sources: kohler_cache.json, kohler_catalog_full.xlsx
+
+1) Summary
+------------------------------------------------------------------------
+Total products: 1412
+Valid products: 1412
+Error count: 0
+Warning count: 20
+Data quality score: 100.0%
+Production ready: True
+
+2) Error Breakdown
+------------------------------------------------------------------------
+
+3) Warning Section (Non-critical)
+------------------------------------------------------------------------
+- Code: 1352425 | Type: low_price_needs_verification | Severity: low
+  Note: Price 450 is in low verification band (50-499).
+  Suggested action: Verify against official price source; keep if confirmed.
+- Code: 1352426 | Type: low_price_needs_verification | Severity: low
+  Note: Price 498 is in low verification band (50-499).
+  Suggested action: Verify against official price source; keep if confirmed.
+- Code: 1352427 | Type: low_price_needs_verification | Severity: low
+  Note: Price 160 is in low verification band (50-499).
+  Suggested action: Verify against official price source; keep if confirmed.
+- Code: K-1063956 | Type: low_price_needs_verification | Severity: low
+  Note: Price 265 is in low verification band (50-499).
+  Suggested action: Verify against official price source; keep if confirmed.
+- Code: K-1226681 | Type: low_price_needs_verification | Severity: low
+  Note: Price 110 is in low verification band (50-499).
+  Suggested action: Verify against official price source; keep if confirmed.
+- Code: K-1286731 | Type: low_price_needs_verification | Severity: low
+  Note: Price 126 is in low verification band (50-499).
+  Suggested action: Verify against official price source; keep if confirmed.
+- Code: K-1527926 | Type: low_price_needs_verification | Severity: low
+  Note: Price 337 is in low verification band (50-499).
+  Suggested action: Verify against official price source; keep if confirmed.
+- Code: K-25346IN-AF | Type: price_outlier_needs_verification | Severity: low
+  Note: Price 2500 outside expected range 3000-350000 for category toilet_sanitary.
+  Suggested action: Manually verify category and official MRP.
+- Code: K-25346IN-BL | Type: price_outlier_needs_verification | Severity: low
+  Note: Price 2900 outside expected range 3000-350000 for category toilet_sanitary.
+  Suggested action: Manually verify category and official MRP.
+- Code: K-25346IN-RGD | Type: price_outlier_needs_verification | Severity: low
+  Note: Price 2900 outside expected range 3000-350000 for category toilet_sanitary.
+  Suggested action: Manually verify category and official MRP.
+- Code: K-28529IN-0 | Type: price_outlier_needs_verification | Severity: low
+  Note: Price 460000 outside expected range 3000-350000 for category toilet_sanitary.
+  Suggested action: Manually verify category and official MRP.
+- Code: K-28780IN-0 | Type: price_outlier_needs_verification | Severity: low
+  Note: Price 1625693 outside expected range 3000-350000 for category toilet_sanitary.
+  Suggested action: Manually verify category and official MRP.
+- Code: K-28780IN-HC-0 | Type: price_outlier_needs_verification | Severity: low
+  Note: Price 1625693 outside expected range 3000-350000 for category toilet_sanitary.
+  Suggested action: Manually verify category and official MRP.
+- Code: K-29777IN-0 | Type: price_outlier_needs_verification | Severity: low
+  Note: Price 360000 outside expected range 3000-350000 for category toilet_sanitary.
+  Suggested action: Manually verify category and official MRP.
+- Code: K-37544IN-SWG-RGD | Type: price_outlier_needs_verification | Severity: low
+  Note: Price 1041128 outside expected range 500-1000000 for category general.
+  Suggested action: Manually verify category and official MRP.
+- Code: K-37550IN-SWM-RGD | Type: price_outlier_needs_verification | Severity: low
+  Note: Price 1005706 outside expected range 500-1000000 for category general.
+  Suggested action: Manually verify category and official MRP.
+- Code: K-38171IN-HC-0 | Type: price_outlier_needs_verification | Severity: low
+  Note: Price 1625693 outside expected range 3000-350000 for category toilet_sanitary.
+  Suggested action: Manually verify category and official MRP.
+- Code: K-5401 | Type: low_price_needs_verification | Severity: low
+  Note: Price 126 is in low verification band (50-499).
+  Suggested action: Verify against official price source; keep if confirmed.
+- Code: K-5401IN-0 | Type: price_outlier_needs_verification | Severity: low
+  Note: Price 790000 outside expected range 3000-350000 for category toilet_sanitary.
+  Suggested action: Manually verify category and official MRP.
+- Code: K-5402IN-ZZ-0 | Type: price_outlier_needs_verification | Severity: low
+  Note: Price 820000 outside expected range 3000-350000 for category toilet_sanitary.
+  Suggested action: Manually verify category and official MRP.
+
+4) Critical Issues
+------------------------------------------------------------------------
+No high-priority critical issues.
+
+5) Final Validation Status
+------------------------------------------------------------------------
+Status: PRODUCTION_READY
+Reason: No high-severity issues and quality threshold met.

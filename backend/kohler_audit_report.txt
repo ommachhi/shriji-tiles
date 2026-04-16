@@ -1,0 +1,76 @@
+
+================================================================================
+KOHLER CATALOG AUDIT REPORT
+================================================================================
+Generated: 2026-04-16T15:11:32.337757
+
+SUMMARY:
+--------------------------------------------------------------------------------
+  Total Products Extracted:  1388
+  Total Products Cached:     1412
+  Total Images Available:    1406
+  OK Products:               1369
+  Products with Errors:      19
+  Products with Warnings:    622
+  Error Rate:                1.37%
+
+ERRORS FOUND:
+================================================================================
+
+🔴 MISSING IMAGE FILE (18 products):
+   EX28093IN-8-AF       (Components ® Single control lav faucet w) - Image: EX28093IN-8-AF.png
+   EX28093IN-8-BL       (Components ® Single control lav faucet w) - Image: EX28093IN-8-BL.png
+   EX28093IN-8-BV       (Components ® Single control lav faucet w) - Image: EX28093IN-8-BV.png
+   EX28093IN-8-RGD      (Components ® Single control lav faucet w) - Image: EX28093IN-8-RGD.png
+   EX28094IN-8-AF       (Components ® Single control lav faucet w) - Image: EX28094IN-8-AF.png
+   ... and 13 more
+
+🔴 MISSING NAME (1 products):
+   K-26286IN-G-BL       Page 138
+
+
+WARNINGS:
+================================================================================
+
+⚠️  SUSPICIOUSLY LOW PRICE (192 products):
+   K-1404IN-K-0         - ₹     1 (Whirlpool Hourglass ™ Drop-in acrylic wh)
+   K-16094IN-4-AF       - ₹     6 (Bib Tap July ™ 2-way bib tap in french g)
+   K-1628460            - ₹     1 (MODEL DESCRIPTION CODE SIZE MRP Strainer)
+   K-1709IN-K-0         - ₹     1 (Whirlpool Ove ™ Drop-in acrylic whirlpoo)
+   K-18777IN-K-0        - ₹     1 (Whirlpool Emerald ™ Drop-in acrylic whir)
+   ... and 187 more
+
+⚠️  SMALL IMAGE FILE (4 products):
+   K-11628IN-BL         (Complementary ™)
+   K-16347IN-AF         (Shower Arm Ceiling-mount shower arm in f)
+   K-25348IN-BRD        (Accent 610mm single towel bar in brushed)
+   K-8524T-BV           (Additional Components Shower slidebar, 7)
+
+⚠️  VARIANT CODES (426 products):
+   EX28093IN-8-AF       - ₹ 37664
+   EX28093IN-8-RGD      - ₹ 37664
+   EX28094IN-8-AF       - ₹ 47080
+   EX28094IN-8-RGD      - ₹ 47080
+   K-10385IN-AF         - ₹  3980
+   K-10385IN-BRD        - ₹  4770
+   K-10386IN-AF         - ₹  4640
+   K-10386IN-BRD        - ₹  5570
+   K-10712IN-AF         - ₹  5600
+   K-12067IN-AF         - ₹  2630
+   ... and 416 more
+
+
+SAMPLE PRODUCTS (First 10 OK):
+================================================================================
+  ✓ 1339378              | ₹     799 | Surface Cleaner
+  ✓ 1352425              | ₹     450 | Surface Cleaner (For Toilet Seats & Tiles)
+  ✓ 1352426              | ₹     498 | Glass Surface Cleaner Qty: 500ml Qty: 1 L Format: 
+  ✓ 1352427              | ₹     160 | Toilet Bowl Cleaner Qty: 1L Qty: 500ml Format: Con
+  ✓ 1563946              | ₹     999 | Faucet Cleaner
+  ✓ 32989IN-NA           | ₹    2000 | Neoroc ® Kitchen Sink Cleaner Qty: 2*50ml Descaler
+  ✓ 39208IN-NA           | ₹    1200 | Stainless Steel Kitchen Sink Cleaner Qty: 500ml Qt
+  ✓ EX25998T-NW-CP       | ₹   36750 | Commercial Faucets Composed ™ Wall mount sensor fa
+  ✓ K-1036901            | ₹    1344 | Genuine Accessories Cario P-trap pipe
+  ✓ K-1036902            | ₹    1506 | Genuine Accessories Vario pan connector
+
+================================================================================

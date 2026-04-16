@@ -780,7 +780,53 @@ def load_catalogs() -> dict[str, dict]:
     return source_store
 
 
+def _catalog_sources_signature() -> tuple:
+    """Build a lightweight signature of catalog source files to detect updates."""
+    entries: list[tuple[str, str, int, int]] = []
+
+    for source_key, config in CATALOG_SOURCES.items():
+        excel_path = Path(config.get("excel_path", "")) if config.get("excel_path") else None
+        cache_path = Path(config.get("cache_path", "")) if config.get("cache_path") else None
+
+        if excel_path:
+            resolved_excel = _resolve_excel_path(excel_path)
+            try:
+                stats = resolved_excel.stat()
+                entries.append((source_key, f"excel:{resolved_excel.name}", stats.st_mtime_ns, stats.st_size))
+            except OSError:
+                entries.append((source_key, f"excel:{resolved_excel.name}", -1, -1))
+
+        if cache_path:
+            try:
+                stats = cache_path.stat()
+                entries.append((source_key, f"cache:{cache_path.name}", stats.st_mtime_ns, stats.st_size))
+            except OSError:
+                entries.append((source_key, f"cache:{cache_path.name}", -1, -1))
+
+    for fallback_path in FALLBACK_PRODUCTS_PATHS:
+        try:
+            stats = fallback_path.stat()
+            entries.append(("fallback", str(fallback_path), stats.st_mtime_ns, stats.st_size))
+        except OSError:
+            entries.append(("fallback", str(fallback_path), -1, -1))
+
+    return tuple(entries)
+
+
 SOURCE_STORE = load_catalogs()
+_CATALOG_SOURCES_SIGNATURE = _catalog_sources_signature()
+
+
+def _ensure_catalogs_loaded() -> None:
+    """Reload catalog data when any source file has changed on disk."""
+    global SOURCE_STORE, _CATALOG_SOURCES_SIGNATURE
+
+    latest_signature = _catalog_sources_signature()
+    if latest_signature == _CATALOG_SOURCES_SIGNATURE:
+        return
+
+    SOURCE_STORE = load_catalogs()
+    _CATALOG_SOURCES_SIGNATURE = latest_signature
 
 
 def _fallback_files_status() -> dict[str, bool]:
@@ -832,6 +878,32 @@ def _relaxed_code_queries(query: str) -> list[str]:
                 relaxed.append(candidate)
 
     return relaxed
+
+
+def _kohler_code_alias_queries(query: str) -> list[str]:
+    """Generate Kohler code aliases for common typing/finish variations."""
+    text = str(query or "").strip().upper().replace(" ", "")
+    if not text:
+        return []
+
+    aliases: list[str] = []
+
+    def _add(candidate: str) -> None:
+        candidate = candidate.strip()
+        if candidate and candidate != text and candidate not in aliases:
+            aliases.append(candidate)
+
+    # Users often type an extra EX prefix; try canonical Kohler K- form too.
+    if text.startswith("EX") and len(text) > 2:
+        _add(text[2:])
+        _add(f"K-{text[2:]}")
+
+    # Common finish mismatch: BRD is often catalogued as RGD or as base code.
+    if text.endswith("-BRD"):
+        _add(text[:-4])
+        _add(f"{text[:-4]}-RGD")
+
+    return aliases
 
 
 def _combined_code_search(query: str, source_key: str) -> list[dict]:
@@ -1075,6 +1147,38 @@ def _search_matches(query: str, source_key: str, limit: int = 20) -> list[dict]:
                 exact_relaxed = source["exact"].get(normalize_code(relaxed_query))
                 if exact_relaxed is not None:
                     return [exact_relaxed]
+
+            if source_key == "kohler":
+                for alias_query in _kohler_code_alias_queries(query):
+                    exact_alias = source["exact"].get(normalize_code(alias_query))
+                    if exact_alias is not None:
+                        return [exact_alias]
+
+                    alias_compact = normalize_code(alias_query)
+                    if not alias_compact:
+                        continue
+                    alias_candidates = [
+                        (
+                            score,
+                            0 if product.get("image") else 1,
+                            0 if product.get("color") else 1,
+                            len(product.get("code", "")),
+                            len(product.get("name", "")),
+                            product,
+                        )
+                        for product in searchable
+                        for score in [
+                            320 if product["_code_compact"] == alias_compact
+                            else 300 if normalize_code(product.get("_code_raw", "")) == alias_compact
+                            else 260 if product["_code_compact"].startswith(alias_compact)
+                            else 200 if alias_compact in product["_code_compact"]
+                            else 0
+                        ]
+                        if score
+                    ]
+                    if alias_candidates:
+                        alias_candidates.sort(key=lambda item: (-item[0], item[1], item[2], item[3], item[4]))
+                        return [item[-1] for item in alias_candidates[:limit]]
 
             if compact_query.isdigit() and len(compact_query) >= 5:
                 relaxed_queries = []
@@ -1385,6 +1489,7 @@ def root():
 @app.get("/health")
 @app.get("/api/health")
 def health():
+    _ensure_catalogs_loaded()
     return {
         "status": "ok",
         "catalogs": {
@@ -1404,6 +1509,8 @@ def search(
     q: str = Query(default=""),
     catalog: str = Query(default="all"),
 ):
+    _ensure_catalogs_loaded()
+
     selected_catalog = catalog.strip().lower()
     if selected_catalog not in {"all", *CATALOG_SOURCES.keys()}:
         selected_catalog = "all"
@@ -1416,7 +1523,7 @@ def search(
     matches = []
     seen_keys = set()
     for source_key in source_keys:
-        source_matches = _manual_query_results(q, source_key) or _image_only_query_results(q, source_key) or _search_matches(q, source_key)
+        source_matches = _manual_query_results(q, source_key) or _search_matches(q, source_key) or _image_only_query_results(q, source_key)
         for match in source_matches:
             unique_key = (
                 source_key,
@@ -1459,6 +1566,8 @@ def autocomplete(
     limit: int = Query(default=10, ge=1, le=20),
 ):
     """Get autocomplete suggestions based on prefix matching."""
+    _ensure_catalogs_loaded()
+
     selected_catalog = catalog.strip().lower()
     if selected_catalog not in {"all", *CATALOG_SOURCES.keys()}:
         selected_catalog = "all"

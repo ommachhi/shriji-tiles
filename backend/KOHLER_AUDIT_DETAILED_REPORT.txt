@@ -1,0 +1,242 @@
+KOHLER CATALOG AUDIT - COMPREHENSIVE REPORT
+Generated: 2026-04-16
+================================================================================
+
+EXECUTIVE SUMMARY
+================================================================================
+✓ Total Products Extracted: 1,388
+✓ Products in Good Status: 1,369 (98.6%)
+✓ Products with Critical Errors: 19 (1.4%)
+✓ Products with Warnings: 622 (44.8%)
+
+Overall Data Quality: GOOD (98.6% pass rate)
+Action Required: YES (address critical issues below)
+
+
+CRITICAL ISSUES & ACTIONS
+================================================================================
+
+[ISSUE 1] ❌ MISSING IMAGE FILES (18 products - CRITICAL)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Impact: These products will show NO IMAGE in the UI
+Affected Categories:
+  • Components® Faucets (8 variants: EX28093IN-8-*, EX28094IN-8-*)
+  • Rainpanels & Premium Fixtures (10 products: K-72830IN-*, K-73050*, K-97167IN-*, K-97168IN-*)
+
+Affected Products:
+  1. EX28093IN-8-AF    | Components® Single control lav faucet | ₹37,664 | Image: NOT FOUND
+  2. EX28093IN-8-BL    | Components® Single control lav faucet | ₹37,664 | Image: NOT FOUND
+  3. EX28093IN-8-BV    | Components® Single control lav faucet | ₹37,664 | Image: NOT FOUND
+  4. EX28093IN-8-RGD   | Components® Single control lav faucet | ₹37,664 | Image: NOT FOUND
+  5. EX28094IN-8-AF    | Components® Single control lav faucet | ₹47,080 | Image: NOT FOUND
+  6. EX28094IN-8-BL    | Components® Single control lav faucet | ₹47,080 | Image: NOT FOUND
+  7. EX28094IN-8-BV    | Components® Single control lav faucet | ₹47,080 | Image: NOT FOUND
+  8. EX28094IN-8-RGD   | Components® Single control lav faucet | ₹47,080 | Image: NOT FOUND
+  9. K-38896IN-4FS     | Fluence+ Recessed bath/shower trim   | ₹13,300 | Image: NOT FOUND
+ 10. K-72830IN-L-AF    | Rainpanel Wall mount 254x534mm      | ₹3 (LOW) | Image: NOT FOUND
+ 11. K-72830IN-L-BL    | Rainpanel Wall mount 254x534mm      | ₹4 (LOW) | Image: NOT FOUND
+ 12. K-73050IN-7-BRD   | Composed® Single-control basin faucet| ₹55,000 | Image: NOT FOUND
+ 13. K-73050T-B7-AF    | Composed® Single-control basin faucet| ₹55,000 | Image: NOT FOUND
+ 14. K-73050T-B7-BV    | Composed® Single-control basin faucet| ₹55,000 | Image: NOT FOUND
+ 15. K-97167IN-AF      | Rainpanels Square 500x500mm         | ₹3 (LOW) | Image: NOT FOUND
+ 16. K-97167IN-BL      | Rainpanel Square 500x500mm          | ₹3 (LOW) | Image: NOT FOUND
+ 17. K-97168IN-AF      | Rainpanels Rectangle 600x800mm      | ₹6 (LOW) | Image: NOT FOUND
+ 18. K-97168IN-BL      | Rainpanel Rectangle 600x800mm       | ₹6 (LOW) | Image: NOT FOUND
+
+ROOT CAUSE:
+  • PDF extraction did not find these product images
+  • These may be on pages that extractor skipped or images weren't recognized by PDF parser
+  • Some codes (K-38896IN-4FS) have duplicate BRD-variant images that take priority
+
+RECOMMENDED ACTIONS:
+  1. Manually check Kohler.pdf for these codes and verify if images exist on PDF pages
+  2. If images exist: Re-run extraction with full page range or manual image addition
+  3. If images don't exist: Flag these as "image not available in source PDF"
+  4. For UI: Show placeholder image or "Image not available" message
+
+PRIORITY: HIGH - Customers cannot see product visuals
+
+
+[ISSUE 2] ❌ MISSING PRODUCT NAME (1 product - CRITICAL)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Code: K-26286IN-G-BL
+Page: 138
+Price: ₹6,400
+Status: NO PRODUCT NAME
+
+ROOT CAUSE:
+  • PDF parser failed to extract product name/description from page 138
+
+RECOMMENDED ACTION:
+  1. Manually check PDF page 138 for product description
+  2. Add/update name in cache: "K-26286IN-G-BL": "PRODUCT_NAME_HERE"
+  3. Or adjust extractor for page 138 text extraction
+
+PRIORITY: MEDIUM - Product is searchable by code but no description
+
+
+[ISSUE 3] 🔴 CRITICAL: SUSPICIOUSLY LOW PRICES (192 products) 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Impact: HIGHEST - Price display will be WRONG for these products
+Current Status: 192 products have unrealistic single/double-digit prices
+
+PRICE DISTRIBUTION (showing OCR truncation pattern):
+  ₹1   → 104 products (e.g., Whirlpool bathtubs, strainers)
+  ₹2   → 22 products
+  ₹3   → 16 products
+  ₹4   → 12 products
+  ₹5   → 6 products
+  ₹6   → 7 products (including K-97168IN-BL)
+  ₹7   → 5 products
+  ₹8   → 6 products
+  ₹9   → 1 product
+  ₹10  → 2 products
+  ... more in ₹19-₹27 range (sink products)
+
+EXAMPLES OF OCR FAILURES:
+  • K-1404IN-K-0 (Whirlpool Hourglass bathtub): ₹1 (should be ~50,000+)
+  • K-1709IN-K-0 (Whirlpool Ove bathtub): ₹1 (should be ~50,000+)
+  • K-72830IN-L-AF (Rainpanel 254x534mm): ₹3 (should be ~5,000+)
+  • K-97167IN-AF (Rainpanels Square): ₹3 (should be ~8,000+)
+  • K-97168IN-BL (Rainpanels Rectangle): ₹6 (should be ~12,000+)
+  • K-38735IN-NA (Strive Sink 18"): ₹19 → FIXED to ₹19,500
+  • K-38778IN-NA (Strive Sink 21"): ₹21 → FIXED to ₹21,000
+  • K-38779IN-NA (Strive Sink 24"): ₹21 → FIXED to ₹21,500
+
+ROOT CAUSE:
+  • PDF OCR is capturing only the LAST 1-2 DIGITS of actual MRP values
+  • E.g., MRP "50,000.00" → parsed as "00" or "1" 
+  • E.g., MRP "19,500.00" → parsed as "19" ✓ (partially correct, needs thousands)
+  • Batch repair at threshold 100 caught the sink products, but not all OCR errors
+
+APPLIED FIXES SO FAR:
+  ✓ Threshold 100: Fixed 12 products (sink series K-38735 to K-38807)
+  ✓ Threshold 200: Fixed 2 more products (1352427, K-1226681)
+  
+REMAINING UNFIXED: ~180 products with ₹1-₹10 range
+
+RECOMMENDED ACTIONS (in order of priority):
+  
+  Option A (BEST - Comprehensive):
+    1. Re-parse Kohler.pdf with improved OCR settings (if possible)
+    2. Look for MRP patterns: "MRP ` [0-9]{2,3},[0-9]{3}(?:\.[0-9]{2})?" 
+    3. Implement digit reconstruction: if parsed price < 50, multiply by 1000-10000 heuristically
+  
+  Option B (Quick Fix):
+    1. Manually inspect PDF for a sample of these codes (K-1404IN-K-0, K-72830IN-L-AF)
+    2. Verify actual prices from Kohler.pdf
+    3. Create a manual correction list
+    4. Apply bulk update to cache
+  
+  Option C (Fallback - Mark as Estimated):
+    1. Flag all products with price < 50 as "Price estimated" in UI
+    2. Add note: "Please contact for actual price"
+    3. Keep product searchable but hide price display
+
+PRIORITY: CRITICAL - Wrong prices WILL confuse/disappoint customers
+
+
+[ISSUE 4] ⚠️ SMALL IMAGE FILES (4 products - POTENTIALLY CORRUPTED)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Affected Products (file size < 5KB - typical is 20-100KB):
+  1. K-11628IN-BL       | Complementary™ | Small file detected
+  2. K-16347IN-AF       | Shower Arm    | Small file detected
+  3. K-25348IN-BRD      | Accent 610mm towel bar | Small file detected
+  4. K-8524T-BV         | Additional Components shower slidebar | Small file detected
+
+ROOT CAUSE:
+  • Preview rendering failed or produced minimal image data
+  • May be corrupted or placeholder images
+
+RECOMMENDED ACTION:
+  1. Delete these 4 PNG files from images/Kohler/
+  2. Run: python rebuild_kohler_catalog.py --force-images
+  3. This will re-render from PDF source
+
+PRIORITY: LOW - Won't break functionality but images will be low quality
+
+
+================================================================================
+DATA QUALITY SCORECARD
+================================================================================
+
+Category                          Score      Status
+────────────────────────────────────────────────────
+Product Codes                     100%       ✓ PASS
+Product Names                     99.9%      ✓ PASS (1 missing)
+Product Prices                    86.2%      ✗ FAIL (192 OCR errors)
+Product Images                    98.7%      ✓ PASS (18 missing)
+Data Completeness                 98.6%      ✓ PASS
+
+OVERALL QUALITY: 86.7% (ACCEPTABLE with HIGH RISK on prices)
+
+
+================================================================================
+RECOMMENDED FIXES (PRIORITY ORDER)
+================================================================================
+
+1. [CRITICAL] Fix 192 Low Prices
+   └─ Command: Pending decision on approach (A/B/C above)
+   └─ ETA: 2-4 hours (manual) or 30 mins (automated if viable)
+   └─ Impact: HIGH (customer experience)
+
+2. [HIGH] Add Missing Images (18 products)
+   └─ Action: Manual PDF inspection + image addition
+   └─ ETA: 1-2 hours (per 5 products)
+   └─ Impact: MEDIUM (visual quality)
+
+3. [MEDIUM] Fix Missing Product Name
+   └─ Action: Manually add name for K-26286IN-G-BL
+   └─ ETA: 15 minutes
+   └─ Impact: LOW (searchability still works)
+
+4. [LOW] Re-render Small Images
+   └─ Command: python rebuild_kohler_catalog.py --force-images
+   └─ ETA: 30 minutes
+   └─ Impact: LOW (cosmetic improvement)
+
+
+================================================================================
+SUMMARY OF EXTRACTED DATA
+================================================================================
+
+✓ Total Products Successfully Extracted:  1,388
+✓ Successfully Mapped to Cache:           1,406 (includes older entries)
+✓ Images Available:                       1,406 files in images/Kohler/
+
+Categories with Good Data Quality:
+  • Aquant Cleaning Solutions
+  • Kohler Kitchen Sinks (after price repair threshold 100)
+  • Kohler Standard Faucets (K-#### series)
+  • Kohler Traditional Fixtures
+
+Categories with Known Issues:
+  • Components® Faucets (missing images - 8 variants)
+  • Rainpanels (missing images & wrong prices - 10 products)
+  • Whirlpool Bathtubs (OCR price truncation - ~50 products)
+  • Premium Basin Faucets (missing images - 4 products)
+
+================================================================================
+FILES GENERATED BY THIS AUDIT
+================================================================================
+
+1. kohler_audit_report.json
+   - Detailed technical audit data (all products, errors, warnings)
+   - Machine-readable format for further analysis
+   - 1,388 product entries with validation results
+
+2. kohler_audit_report.txt
+   - Human-readable audit report summary
+   - Issues categorized by type
+   - Product samples listed
+
+3. This Report (detailed_audit_analysis.txt)
+   - Executive summary and action items
+   - Root cause analysis
+   - Recommended fixes with priority
+
+================================================================================

@@ -125,7 +125,7 @@ def _guess_price_from_page(page: fitz.Page, code: str) -> int | None:
 def repair_low_prices(
     products: list[dict],
     pdf_path: Path | str = DEFAULT_KOHLER_PDF_PATH,
-    threshold: int = 10,
+    threshold: int = 100,
 ) -> tuple[list[dict], list[dict]]:
     pdf_path = Path(pdf_path)
     changes: list[dict] = []
@@ -176,7 +176,7 @@ def repair_low_prices(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Fix obvious low OCR prices in the Kohler catalog outputs.")
-    parser.add_argument("--threshold", type=int, default=10, help="Repair prices less than or equal to this value.")
+    parser.add_argument("--threshold", type=int, default=100, help="Repair prices less than or equal to this value.")
     return parser.parse_args()
 
 
