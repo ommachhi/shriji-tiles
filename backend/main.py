@@ -389,6 +389,36 @@ def _split_code_variant(code: str) -> tuple[str, str]:
     return base_code, variant
 
 
+def _coerce_price(value) -> int:
+    """Normalize price values from excel/cache/json into a safe integer rupee amount."""
+    if value is None:
+        return 0
+
+    if isinstance(value, bool):
+        return int(value)
+
+    if isinstance(value, (int, float)):
+        try:
+            return max(0, int(round(float(value))))
+        except (TypeError, ValueError):
+            return 0
+
+    text = str(value).strip()
+    if not text:
+        return 0
+
+    # Handle common production payload formats such as "₹ 12,345/-".
+    cleaned = text.replace(",", "")
+    match = re.search(r"\d+(?:\.\d{1,2})?", cleaned)
+    if not match:
+        return 0
+
+    try:
+        return max(0, int(round(float(match.group(0)))))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _infer_variant_from_color(color: str) -> str:
     normalized_color = normalize_text(color).strip()
     if not normalized_color:
@@ -442,10 +472,7 @@ def _load_catalog_from_excel(excel_path: Path, source_key: str, source_label: st
 
             seen_codes.add(compact_code)
 
-            try:
-                price = int(float(_value(row, "price", 0) or 0))
-            except (TypeError, ValueError):
-                price = 0
+            price = _coerce_price(_value(row, "price", 0))
 
             image_file = str(_value(row, "image_file", "")).strip()
             image_value = str(_value(row, "image", "")).strip()
@@ -538,10 +565,7 @@ def _load_catalog_from_cache(cache_path: Path, source_key: str, source_label: st
 
         seen_codes.add(compact_code)
 
-        try:
-            price = int(float(item.get("price", 0) or 0))
-        except (TypeError, ValueError):
-            price = 0
+        price = _coerce_price(item.get("price", 0))
 
         source_value = str(item.get("source", source_key)).strip().lower() or source_key
         source_label_value = str(item.get("source_label") or item.get("sourceLabel") or source_label).strip() or source_label
@@ -634,10 +658,7 @@ def _load_catalog_from_products_file(products_path: Path, source_key: str, sourc
         if not name:
             name = code
 
-        try:
-            price = int(float(item.get("price", 0) or 0))
-        except (TypeError, ValueError):
-            price = 0
+        price = _coerce_price(item.get("price", 0))
 
         base_code_value = str(item.get("base_code") or item.get("baseCode") or "").strip()
         variant_value = str(item.get("variant", "")).strip().upper()
@@ -791,10 +812,7 @@ def load_catalogs() -> dict[str, dict]:
                 code_key = normalize_code(row.get("code", ""))
                 if not code_key:
                     continue
-                try:
-                    candidate_price = int(float(row.get("price", 0) or 0))
-                except (TypeError, ValueError):
-                    candidate_price = 0
+                candidate_price = _coerce_price(row.get("price", 0))
                 if candidate_price > 0 and candidate_price > replacement_price_by_code.get(code_key, 0):
                     replacement_price_by_code[code_key] = candidate_price
 
@@ -803,10 +821,7 @@ def load_catalogs() -> dict[str, dict]:
             code_key = normalize_code(row.get("code", ""))
             if not code_key:
                 continue
-            try:
-                current_price = int(float(row.get("price", 0) or 0))
-            except (TypeError, ValueError):
-                current_price = 0
+            current_price = _coerce_price(row.get("price", 0))
             replacement_price = replacement_price_by_code.get(code_key, 0)
             if current_price <= 0 and replacement_price > 0:
                 row["price"] = replacement_price
@@ -1474,7 +1489,7 @@ def _serialize_product(request: Request, product: dict) -> dict:
         "groupId": str(base_code_value or normalize_code(product.get("code", "")) or "ungrouped"),
         "variant": product.get("variant"),
         "isCp": bool(product.get("is_cp")),
-        "price": product.get("price", 0),
+        "price": _coerce_price(product.get("price", 0)),
         "color": product.get("color"),
         "size": product.get("size"),
         "details": product.get("details"),
@@ -1505,7 +1520,7 @@ def _serialize_product(request: Request, product: dict) -> dict:
                 "code": item.get("code", ""),
                 "name": item.get("name", ""),
                 "variant": item.get("variant"),
-                "price": item.get("price", 0),
+                "price": _coerce_price(item.get("price", 0)),
                 "color": item.get("color"),
             }
             for item in combined_products
@@ -1531,12 +1546,27 @@ def root():
 @app.get("/api/health")
 def health():
     _ensure_catalogs_loaded()
+
+    price_diagnostics = {}
+    for source_key, store in SOURCE_STORE.items():
+        catalog = store.get("catalog", [])
+        total = len(catalog)
+        with_price = sum(1 for row in catalog if _coerce_price(row.get("price", 0)) > 0)
+        missing = max(0, total - with_price)
+        price_diagnostics[source_key] = {
+            "total": total,
+            "with_price": with_price,
+            "missing_price": missing,
+            "with_price_percent": round((with_price / total) * 100, 2) if total else 0.0,
+        }
+
     return {
         "status": "ok",
         "catalogs": {
             source_key: len(store["catalog"])
             for source_key, store in SOURCE_STORE.items()
         },
+        "price_diagnostics": price_diagnostics,
         "images_dir": str(IMAGES_DIR),
         "cwd": str(Path.cwd()),
         "base_dir": str(BASE_DIR),

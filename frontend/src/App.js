@@ -68,6 +68,29 @@ function parseCodeParts(value) {
   return { baseCode, variant: tail.slice(0, 6) };
 }
 
+function coercePrice(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.max(0, Math.round(value));
+  }
+
+  const text = String(value ?? "").trim();
+  if (!text) {
+    return 0;
+  }
+
+  const match = text.replace(/,/g, "").match(/\d+(?:\.\d{1,2})?/);
+  if (!match) {
+    return 0;
+  }
+
+  const parsed = Number(match[0]);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return 0;
+  }
+
+  return Math.round(parsed);
+}
+
 function normalizeImageUrl(value) {
   const raw = String(value || "").trim();
   if (!raw) {
@@ -258,6 +281,7 @@ function App() {
       const baseCode = product?.baseCode || parsed.baseCode || String(product?.code || "").trim();
       const variant = String(product?.variant || parsed.variant || "").toUpperCase();
       const isCp = Boolean(product?.isCp || variant === "CP");
+      const normalizedPrice = coercePrice(product?.price);
 
       if (!groups.has(baseCode)) {
         groups.set(baseCode, []);
@@ -265,6 +289,7 @@ function App() {
 
       groups.get(baseCode).push({
         ...product,
+        price: normalizedPrice,
         baseCode,
         variant,
         isCp,
@@ -297,7 +322,7 @@ function App() {
       size: product.size || "-",
       color: product.color || "-",
       qty: 1,
-      rate: product.price || 0,
+      rate: coercePrice(product.price),
       discount: 0, // row-specific discount %
       room: "",
     };
@@ -549,12 +574,18 @@ function App() {
                             {!product.isCp && product.price > 0 && (
                               <span className="variant-price-overlay">{currencyFormatter.format(product.price)}</span>
                             )}
+                            {!product.isCp && product.price <= 0 && (
+                              <span className="variant-price-na">Price Not Available</span>
+                            )}
                           </div>
                           <div className="variant-card-meta">
                             <span className="variant-code-text">{product.code}</span>
                             <span className="variant-finish-text">{product.color || product.variant || "Standard"}</span>
                             {product.isCp && product.price > 0 && (
                               <span className="variant-price-inline">{currencyFormatter.format(product.price)}</span>
+                            )}
+                            {product.isCp && product.price <= 0 && (
+                              <span className="variant-price-inline variant-price-inline-na">Price Not Available</span>
                             )}
                           </div>
                         </div>
