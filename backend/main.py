@@ -1561,7 +1561,15 @@ def serve_image(image_path: str):
     resolved = _resolve_existing_image_path(image_path)
     if not resolved:
         return Response(status_code=404)
-    return FileResponse(resolved)
+    return FileResponse(
+        resolved,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+            "Cross-Origin-Resource-Policy": "cross-origin",
+        },
+    )
 
 
 @app.get("/")
