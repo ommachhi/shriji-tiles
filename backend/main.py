@@ -67,8 +67,64 @@ FALLBACK_PRODUCTS_PATHS = [
     Path.cwd() / "products.json",
 ]
 
+KOHLER_LOCKED_PRODUCTS_PATHS = [
+    BASE_DIR / "KOHLER_PRODUCTS_FINAL_LOCKED.json",
+    BASE_DIR / "kohler_pdf_final_validated.json",
+]
+
 # Manual corrections requested from catalog PDF references.
 PRODUCT_OVERRIDES = {
+    "k73159tb7af": {
+        "price": 60500,
+    },
+    "k73061t7af": {
+        "price": 60500,
+    },
+    "k73061t7bv": {
+        "price": 60500,
+    },
+    "k73159tb7bv": {
+        "price": 60500,
+    },
+    "k24431in9fpbrd": {
+        "price": 17500,
+    },
+    "k73061t7rgd": {
+        "price": 60500,
+    },
+    "k24431in9fprgd": {
+        "price": 16300,
+    },
+    "k73050tb7bl": {
+        "price": 55000,
+    },
+    "k73159in7brd": {
+        "price": 60500,
+    },
+    "k24431in9fpaf": {
+        "price": 14700,
+    },
+    "k24431in9fpbv": {
+        "price": 17500,
+    },
+    "k24431in9fpcp": {
+        "price": 11700,
+    },
+    "k16346incp": {
+        "price": 4300,
+    },
+    "k16347incp": {
+        "price": 4300,
+    },
+    "k24431in9fpbl": {
+        "price": 16300,
+    },
+    "k705109inshp": {
+        "price": 106100,
+    },
+    "k38896in4fsaf": {
+        "price": 10250,
+    },
     "1961": {
         "name": "Semi Counter Basin",
         "price": 16500,
@@ -882,7 +938,120 @@ def _catalog_sources_signature() -> tuple:
         except OSError:
             entries.append(("fallback", str(fallback_path), -1, -1))
 
+    for locked_path in KOHLER_LOCKED_PRODUCTS_PATHS:
+        try:
+            stats = locked_path.stat()
+            entries.append(("kohler-locked", str(locked_path), stats.st_mtime_ns, stats.st_size))
+        except OSError:
+            entries.append(("kohler-locked", str(locked_path), -1, -1))
+
     return tuple(entries)
+
+
+def _load_kohler_locked_index() -> dict[str, dict]:
+    for locked_path in KOHLER_LOCKED_PRODUCTS_PATHS:
+        if not locked_path.exists():
+            continue
+
+        try:
+            raw_data = json.loads(locked_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            print(f"[catalog:kohler] failed to read locked dataset {locked_path.name}: {error}")
+            continue
+
+        if not isinstance(raw_data, list):
+            continue
+
+        index: dict[str, dict] = {}
+        for item in raw_data:
+            if not isinstance(item, dict):
+                continue
+
+            code = str(item.get("code") or "").strip()
+            if not code:
+                continue
+
+            compact = normalize_code(code)
+            if not compact:
+                continue
+
+            image_value = str(item.get("image") or "").strip()
+            if image_value:
+                relative = image_relative_path(image_value)
+                if relative:
+                    if not relative.startswith("Kohler/"):
+                        kohler_relative = f"Kohler/{relative}"
+                        if _resolve_existing_image_path(kohler_relative):
+                            relative = kohler_relative
+                    image_value = f"/images/{relative}"
+
+            try:
+                page_number = int(float(item.get("page") or item.get("page_number") or 0))
+            except (TypeError, ValueError):
+                page_number = 0
+
+            index[compact] = {
+                "source": "kohler",
+                "source_label": "Kohler",
+                "code": code,
+                "name": str(item.get("name") or code).strip() or code,
+                "price": _coerce_price(item.get("price", 0)),
+                "color": str(item.get("color") or item.get("finish") or "").strip() or None,
+                "size": str(item.get("size") or "").strip() or None,
+                "details": str(item.get("details") or item.get("name") or code).strip() or code,
+                "page_number": page_number,
+                "image": image_value,
+                "base_code": str(item.get("base_code") or item.get("baseCode") or "").strip() or None,
+                "variant": str(item.get("variant") or "").strip().upper() or None,
+                "is_cp": str(item.get("variant") or "").strip().upper() == "CP",
+            }
+
+        if index:
+            print(f"[catalog:kohler] loaded locked PDF index from {locked_path.name} ({len(index)} codes)")
+            return index
+
+    return {}
+
+
+KOHLER_LOCKED_INDEX = _load_kohler_locked_index()
+
+
+def _kohler_locked_lookup(query: str) -> dict | None:
+    compact = normalize_code(query)
+    if not compact or not KOHLER_LOCKED_INDEX:
+        return None
+
+    candidates = [compact]
+
+    # Common typo in manual typing: EXE28094... should resolve to EX28094...
+    if compact.startswith("exe") and len(compact) > 3:
+        candidates.append(f"ex{compact[3:]}")
+
+    if compact.startswith("k") and len(compact) > 1:
+        candidates.append(compact[1:])
+    else:
+        candidates.append(f"k{compact}")
+
+    for alias_query in _kohler_code_alias_queries(query):
+        alias_compact = normalize_code(alias_query)
+        if alias_compact:
+            candidates.append(alias_compact)
+
+    if compact.endswith("b"):
+        candidates.append(f"{compact}l")
+        candidates.append(f"{compact}v")
+
+    seen = set()
+    for candidate in candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+
+        product = KOHLER_LOCKED_INDEX.get(candidate)
+        if product is not None:
+            return dict(product)
+
+    return None
 
 
 SOURCE_STORE = load_catalogs()
@@ -1226,6 +1395,11 @@ def _search_matches(query: str, source_key: str, limit: int = 20) -> list[dict]:
                 )
 
         if not code_candidates:
+            if source_key == "kohler":
+                locked_match = _kohler_locked_lookup(query)
+                if locked_match is not None:
+                    return [locked_match]
+
             for relaxed_query in _relaxed_code_queries(query):
                 exact_relaxed = source["exact"].get(normalize_code(relaxed_query))
                 if exact_relaxed is not None:
@@ -1306,6 +1480,11 @@ def _search_matches(query: str, source_key: str, limit: int = 20) -> list[dict]:
                     if relaxed_candidates:
                         relaxed_candidates.sort(key=lambda item: (-item[0], item[1], item[2], item[3], item[4]))
                         return [item[-1] for item in relaxed_candidates[:limit]]
+
+            if source_key == "kohler":
+                locked_match = _kohler_locked_lookup(query)
+                if locked_match is not None:
+                    return [locked_match]
 
             return []
 
@@ -1524,21 +1703,52 @@ def _serialize_product(request: Request, product: dict) -> dict:
         "hasImage": has_image,
     }
 
-    if source_key == "aquant":
-        override = PRODUCT_OVERRIDES.get(normalize_code(serialized.get("code", "")))
-        if override:
-            for field in ("name", "price", "color", "size", "details"):
-                if field in override:
-                    serialized[field] = override[field]
+    if source_key == "kohler":
+        locked_override = _kohler_locked_lookup(code_value)
+        if locked_override:
+            locked_price = _coerce_price(locked_override.get("price", 0))
+            if locked_price > 0:
+                serialized["price"] = locked_price
 
-            override_image = str(override.get("image") or "").strip()
-            if override_image:
-                relative = image_relative_path(override_image)
+            locked_name = str(locked_override.get("name") or "").strip()
+            if locked_name:
+                serialized["name"] = locked_name
+
+            locked_details = str(locked_override.get("details") or "").strip()
+            if locked_details:
+                serialized["details"] = locked_details
+
+            locked_color = str(locked_override.get("color") or "").strip()
+            if locked_color:
+                serialized["color"] = locked_color
+
+            locked_size = str(locked_override.get("size") or "").strip()
+            if locked_size:
+                serialized["size"] = locked_size
+
+            locked_image = str(locked_override.get("image") or "").strip()
+            if locked_image:
+                relative = image_relative_path(locked_image)
                 resolved = _resolve_existing_image_path(relative)
                 if resolved:
                     version = f"?v={int(resolved.stat().st_mtime)}"
                     serialized["image"] = f"{str(request.base_url).rstrip('/')}/images/{relative}{version}"
                     serialized["hasImage"] = True
+
+    override = PRODUCT_OVERRIDES.get(normalize_code(serialized.get("code", "")))
+    if override:
+        for field in ("name", "price", "color", "size", "details"):
+            if field in override:
+                serialized[field] = override[field]
+
+        override_image = str(override.get("image") or "").strip()
+        if override_image:
+            relative = image_relative_path(override_image)
+            resolved = _resolve_existing_image_path(relative)
+            if resolved:
+                version = f"?v={int(resolved.stat().st_mtime)}"
+                serialized["image"] = f"{str(request.base_url).rstrip('/')}/images/{relative}{version}"
+                serialized["hasImage"] = True
 
     combined_products = product.get("combined_products")
     if isinstance(combined_products, list) and combined_products:
@@ -1624,8 +1834,13 @@ def search(
     if selected_catalog not in {"all", *CATALOG_SOURCES.keys()}:
         selected_catalog = "all"
 
+    compact_query = normalize_code(effective_query)
+    kohler_like_query = bool(compact_query and (compact_query.startswith("k") or compact_query.startswith("ex")))
+
     if selected_catalog == "all":
-        source_keys = list(CATALOG_SOURCES.keys())
+        # For Kohler-like code searches, prefer Kohler catalog only to avoid
+        # cross-catalog duplicates with wrong image/price cards.
+        source_keys = ["kohler"] if kohler_like_query and compact_query else list(CATALOG_SOURCES.keys())
     else:
         source_keys = [selected_catalog]
 
@@ -1687,8 +1902,11 @@ def autocomplete(
     if selected_catalog not in {"all", *CATALOG_SOURCES.keys()}:
         selected_catalog = "all"
     
+    compact_query = normalize_code(effective_query)
+    kohler_like_query = bool(compact_query and (compact_query.startswith("k") or compact_query.startswith("ex")))
+
     if selected_catalog == "all":
-        source_keys = list(CATALOG_SOURCES.keys())
+        source_keys = ["kohler"] if kohler_like_query and compact_query else list(CATALOG_SOURCES.keys())
     else:
         source_keys = [selected_catalog]
     

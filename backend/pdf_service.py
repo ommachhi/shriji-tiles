@@ -79,10 +79,21 @@ def generate_professional_pdf(data: dict):
         parsed = urlparse(raw_url)
         path_value = unquote(parsed.path or "")
         filename = Path(path_value).name if path_value else ""
+        relative_path = ""
+        if "/images/" in path_value:
+            relative_path = path_value.split("/images/", 1)[1].lstrip("/")
+        elif path_value.startswith("/images/"):
+            relative_path = path_value.removeprefix("/images/").lstrip("/")
 
         # Local first: resolves /images/<file> without extra HTTP calls.
+        local_candidates = []
+        if relative_path:
+            local_candidates.append(images_dir / Path(relative_path))
         if filename:
-            local_path = images_dir / filename
+            local_candidates.append(images_dir / filename)
+            local_candidates.append(images_dir / "Kohler" / filename)
+
+        for local_path in local_candidates:
             if local_path.exists() and local_path.is_file():
                 try:
                     return BytesIO(local_path.read_bytes())
