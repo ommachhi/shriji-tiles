@@ -12,6 +12,7 @@ const GST_RATE = 18;
 const RUPEE = "\u20B9";
 const CUSTOM_FONT = "ShreejiArial";
 const DEFAULT_PUBLIC_ASSET_BASE = "https://shriji-tiles.onrender.com";
+const PDF_FALLBACK_IMAGE_PATH = "/assets/fallback-product.svg";
 
 const PAGE = {
   width: 210,
@@ -252,9 +253,9 @@ function createProductPlaceholderAsset(label = "Product") {
   ctx.lineWidth = 4;
   ctx.strokeRect(14, 14, 292, 212);
   ctx.fillStyle = "#64748b";
-  ctx.font = "700 24px Arial, sans-serif";
+  ctx.font = "700 22px Arial, sans-serif";
   ctx.textAlign = "center";
-  ctx.fillText("PRODUCT IMAGE", 160, 122);
+  ctx.fillText("IMAGE NOT FOUND", 160, 122);
   ctx.font = "500 18px Arial, sans-serif";
   ctx.fillText(String(label).slice(0, 30), 160, 154);
 
@@ -329,6 +330,21 @@ function uniqueNonEmpty(values) {
   });
 
   return result;
+}
+
+function buildPublicAssetUrl(path, publicAssetBase) {
+  const raw = String(path || "").trim();
+  if (!raw) {
+    return "";
+  }
+
+  const base = normalizePublicAssetBase(publicAssetBase);
+
+  try {
+    return new URL(raw, base).toString();
+  } catch (error) {
+    return "";
+  }
 }
 
 async function urlToDataUrl(src) {
@@ -448,7 +464,7 @@ async function resolveImageAsset(src, fallbackLabel = "Product", rasterize = tru
   }
 }
 
-async function resolveBestImageAsset(sources, fallbackLabel = "Product") {
+async function resolveBestImageAsset(sources, fallbackLabel = "Product", options = {}) {
   const candidates = uniqueNonEmpty(sources);
 
   for (const candidate of candidates) {
@@ -457,6 +473,17 @@ async function resolveBestImageAsset(sources, fallbackLabel = "Product") {
       return {
         imageAsset: asset,
         resolvedSource: candidate,
+      };
+    }
+  }
+
+  const fallbackAssetUrl = buildPublicAssetUrl(PDF_FALLBACK_IMAGE_PATH, options.publicAssetBase);
+  if (fallbackAssetUrl) {
+    const asset = await resolveImageAsset(fallbackAssetUrl, fallbackLabel, true);
+    if (asset?.dataUrl) {
+      return {
+        imageAsset: asset,
+        resolvedSource: fallbackAssetUrl,
       };
     }
   }
@@ -555,7 +582,12 @@ async function attachProductImages(products, options = {}) {
       const key = sourceCandidates[0] || `placeholder:${product.sku}:${product.name}`;
 
       if (!cache.has(key)) {
-        cache.set(key, resolveBestImageAsset(sourceCandidates, product.sku || product.name));
+        cache.set(
+          key,
+          resolveBestImageAsset(sourceCandidates, product.sku || product.name, {
+            publicAssetBase,
+          })
+        );
       }
 
       const resolved = await cache.get(key);
@@ -667,9 +699,10 @@ function drawImageFallback(doc, x, y, width, height, fontFamily) {
   setFillColor(doc, COLORS.headerFill);
   doc.rect(x, y, width, height, "FD");
   setPdfFont(doc, fontFamily, "bold");
-  doc.setFontSize(5.8);
+  doc.setFontSize(4.8);
   setTextColor(doc, COLORS.muted);
-  doc.text("IMG", x + width / 2, y + height / 2 + 1.8, { align: "center" });
+  doc.text("IMAGE", x + width / 2, y + height / 2 - 0.2, { align: "center" });
+  doc.text("NOT FOUND", x + width / 2, y + height / 2 + 3.3, { align: "center" });
 }
 
 function fitLines(doc, text, maxWidth, maxLines) {
