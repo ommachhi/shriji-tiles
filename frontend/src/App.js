@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect } from "react";
+import React, { useMemo, useState, useEffect, useRef, useCallback } from "react";
 import axios from "axios";
 import "./App.css";
 import { buildProposalFileName, generateQuotationPDF } from "./pdf/quotationPdf";
@@ -269,6 +269,7 @@ function App() {
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState("");
   const [pdfZoom, setPdfZoom] = useState(100);
   const [pdfGenerating, setPdfGenerating] = useState(false);
+  const [loadedImages, setLoadedImages] = useState({});
   const [imagePreview, setImagePreview] = useState({
     isOpen: false,
     src: "",
@@ -299,6 +300,9 @@ function App() {
 
   // BOM State
   const [bom, setBom] = useState([]);
+  const searchAbortRef = useRef(null);
+  const searchRequestIdRef = useRef(0);
+  const suggestionRequestIdRef = useRef(0);
 
   useEffect(() => {
     setQuery("");
@@ -306,6 +310,11 @@ function App() {
     setSuggestions([]);
     setHasSearched(false);
     setShowSuggestions(false);
+
+    // Warm backend once so first manual search is fast for the user.
+    axios.get(`${BACKEND_BASE_URL}/health`).catch(() => {
+      // Ignore warmup errors; normal search flow handles API failures.
+    });
   }, []);
 
   useEffect(() => {
@@ -313,10 +322,35 @@ function App() {
       if (pdfPreviewUrl) {
         window.URL.revokeObjectURL(pdfPreviewUrl);
       }
+      if (searchAbortRef.current) {
+        searchAbortRef.current.abort();
+      }
     };
   }, [pdfPreviewUrl]);
 
   const searchRef = React.useRef(null);
+
+  const getImageKey = useCallback((product) => {
+    return `${product?.source || "na"}:${product?.code || ""}:${product?.image || ""}`;
+  }, []);
+
+  const markImageLoaded = useCallback((product) => {
+    const key = getImageKey(product);
+    if (!key) {
+      return;
+    }
+    setLoadedImages((prev) => {
+      if (prev[key]) {
+        return prev;
+      }
+      return { ...prev, [key]: true };
+    });
+  }, [getImageKey]);
+
+  const isImageLoaded = useCallback((product) => {
+    const key = getImageKey(product);
+    return Boolean(loadedImages[key]);
+  }, [getImageKey, loadedImages]);
 
   useEffect(() => {
     function handleClickOutside(event) {
@@ -329,21 +363,18 @@ function App() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // Debounce effect for search (increased to 400ms)
+  // Debounce effect for suggestions only; full search executes on submit/select.
   useEffect(() => {
     const timer = setTimeout(() => {
       if (query.trim().length >= 1) {
-        // Fetch autocomplete suggestions
         fetchSuggestions(query.trim(), activeCatalog);
-        // Execute full search
-        executeSearch(query.trim(), activeCatalog);
       } else {
         setResults([]);
         setSuggestions([]);
         setHasSearched(false);
         setShowSuggestions(false);
       }
-    }, 400);  // Increased debounce from 200ms to 400ms
+    }, 220);
     return () => clearTimeout(timer);
   }, [query, activeCatalog]);
 
@@ -352,35 +383,69 @@ function App() {
       setSuggestions([]);
       return;
     }
+    const requestId = ++suggestionRequestIdRef.current;
     try {
       const autocompleteUrl = `${BACKEND_BASE_URL}/autocomplete?q=${encodeURIComponent(searchQuery)}&catalog=${encodeURIComponent(catalogId)}&limit=8`;
       const response = await axios.get(autocompleteUrl);
+      if (requestId !== suggestionRequestIdRef.current) {
+        return;
+      }
       setSuggestions(response.data?.suggestions || []);
       setShowSuggestions(true);
     } catch (error) {
+      if (requestId !== suggestionRequestIdRef.current) {
+        return;
+      }
       setSuggestions([]);
     }
   }
 
-  async function executeSearch(searchQuery, catalogId) {
+  async function executeSearch(searchQuery, catalogId, options = {}) {
     if (!searchQuery) return;
-    setLoading(true);
+    const { showLoading = true } = options;
+    const requestId = ++searchRequestIdRef.current;
+
+    if (searchAbortRef.current) {
+      searchAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    searchAbortRef.current = controller;
+
+    if (showLoading) {
+      setLoading(true);
+    }
+
     try {
       const requestUrl = `${API_URL}?q=${encodeURIComponent(searchQuery)}&catalog=${encodeURIComponent(catalogId)}`;
-      const response = await axios.get(requestUrl);
+      const started = performance.now();
+      const response = await axios.get(requestUrl, { signal: controller.signal });
+      if (requestId !== searchRequestIdRef.current) {
+        return;
+      }
+      const elapsedMs = performance.now() - started;
+      console.info("Search completed", { searchQuery, catalogId, elapsedMs: Math.round(elapsedMs) });
       setResults(response.data?.results || []);
       setHasSearched(true);
     } catch (requestError) {
+      if (axios.isCancel(requestError) || requestError?.code === "ERR_CANCELED") {
+        return;
+      }
+      if (requestId !== searchRequestIdRef.current) {
+        return;
+      }
       setResults([]);
     } finally {
-      setLoading(false);
+      if (requestId === searchRequestIdRef.current && showLoading) {
+        setLoading(false);
+      }
     }
   }
 
-  const selectSuggestion = (suggestion) => {
+  const selectSuggestion = async (suggestion) => {
     setQuery(suggestion.code);
     setSuggestions([]);
     setShowSuggestions(false);
+    await executeSearch(suggestion.code, activeCatalog, { showLoading: true });
   };
 
   async function runSearch(event) {
@@ -672,7 +737,11 @@ function App() {
                 type="text"
                 placeholder="Type code (e.g. 2631) or name..."
                 value={query}
-                onChange={(event) => setQuery(event.target.value)}
+                onChange={(event) => {
+                  setQuery(event.target.value);
+                  // While typing, show lightweight suggestions instead of stale full-result overlay.
+                  setHasSearched(false);
+                }}
               />
                           {/* Autocomplete Suggestions Dropdown */}
                           {showSuggestions && suggestions.length > 0 && (
@@ -684,8 +753,19 @@ function App() {
                                   className="suggestion-item"
                                   onClick={() => selectSuggestion(suggestion)}
                                 >
-                                  <span className="suggestion-code">{suggestion.code}</span>
-                                  <span className="suggestion-name">{suggestion.name}</span>
+                                  <img
+                                    src={buildProductImageUrl(suggestion)}
+                                    alt=""
+                                    className="suggestion-thumb"
+                                    loading="lazy"
+                                    decoding="async"
+                                    onError={(event) => handleProductImageError(event, suggestion)}
+                                  />
+                                  <span className="suggestion-meta">
+                                    <span className="suggestion-code">{suggestion.code}</span>
+                                    <span className="suggestion-name">{suggestion.name}</span>
+                                    <span className="suggestion-source">{suggestion.source || activeCatalog}</span>
+                                  </span>
                                 </button>
                               ))}
                             </div>
@@ -723,10 +803,14 @@ function App() {
                           onClick={() => addToBom(product)}
                         >
                           <div className="variant-image-wrap">
+                            <div className={isImageLoaded(product) ? "image-placeholder is-hidden" : "image-placeholder"}>Loading image...</div>
                             <img
                               src={buildProductImageUrl(product)}
                               alt=""
                               className="clickable-image"
+                              loading="lazy"
+                              decoding="async"
+                              onLoad={() => markImageLoaded(product)}
                               onClick={(event) => openImagePreview(event, product)}
                               onError={(event) => handleProductImageError(event, product)}
                             />
@@ -782,13 +866,19 @@ function App() {
                     <td>{item.code}</td>
                     <td className="col-product">
                       <div className="product-info-cell">
-                        <img
-                          src={buildProductImageUrl(item)}
-                          alt=""
-                          className="clickable-image"
-                          onClick={(event) => openImagePreview(event, item)}
-                          onError={(event) => handleProductImageError(event, item)}
-                        />
+                        <div className="product-thumb-wrap">
+                          <div className={isImageLoaded(item) ? "image-placeholder table-image-placeholder is-hidden" : "image-placeholder table-image-placeholder"}>Loading image...</div>
+                          <img
+                            src={buildProductImageUrl(item)}
+                            alt=""
+                            className="clickable-image"
+                            loading="lazy"
+                            decoding="async"
+                            onLoad={() => markImageLoaded(item)}
+                            onClick={(event) => openImagePreview(event, item)}
+                            onError={(event) => handleProductImageError(event, item)}
+                          />
+                        </div>
                         <span>{item.name}</span>
                       </div>
                     </td>

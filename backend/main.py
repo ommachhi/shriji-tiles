@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+import time
+from functools import lru_cache
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -250,7 +253,45 @@ MANUAL_QUERY_RESULTS = {
     ],
 }
 
+# Manually hidden catalog codes requested by sales/admin team.
+# Keep entries normalized (no spaces/symbols).
+MANUALLY_REMOVED_PRODUCT_CODES = {
+    "7009bg",
+    "7009gg",
+    "7009rg",
+    "7000gg",
+    "7000rg",
+}
+
+
+def _is_manually_removed_code(code: str) -> bool:
+    return normalize_code(code) in MANUALLY_REMOVED_PRODUCT_CODES
+
 app = FastAPI(title="Multi Catalog Product Search API")
+
+logger = logging.getLogger("catalog_api")
+if not logger.handlers:
+    logging.basicConfig(level=logging.INFO)
+
+ENABLE_CATALOG_AUTO_RELOAD = os.environ.get("ENABLE_CATALOG_AUTO_RELOAD", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+}
+CATALOG_RELOAD_INTERVAL_SECONDS = max(0, int(os.environ.get("CATALOG_RELOAD_INTERVAL_SECONDS", "15") or 15))
+_LAST_CATALOG_RELOAD_CHECK_TS = 0.0
+_SERVER_STARTED_AT = time.perf_counter()
+ENABLE_IMAGE_VERSIONING = os.environ.get("ENABLE_IMAGE_VERSIONING", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+}
+ENABLE_IMAGE_VALIDATION = os.environ.get("ENABLE_IMAGE_VALIDATION", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+}
+RUNTIME_CATALOG_CACHE_PATH = BASE_DIR / ".runtime_catalog_cache.json"
 
 
 def _cors_origins_from_env() -> tuple[list[str], str | None, bool]:
@@ -308,8 +349,8 @@ def _candidate_images_dirs() -> list[Path]:
     return resolved or [IMAGES_DIR]
 
 
-def _resolve_existing_image_path(relative_path: str) -> Path | None:
-    clean_relative = image_relative_path(relative_path)
+@lru_cache(maxsize=8192)
+def _resolve_existing_image_path_cached(clean_relative: str) -> Path | None:
     if not clean_relative:
         return None
 
@@ -320,17 +361,26 @@ def _resolve_existing_image_path(relative_path: str) -> Path | None:
     return None
 
 
+def _resolve_existing_image_path(relative_path: str) -> Path | None:
+    clean_relative = image_relative_path(relative_path)
+    return _resolve_existing_image_path_cached(clean_relative)
+
+
 def _versioned_image_path(image_name: str) -> str:
     relative_path = image_relative_path(image_name)
     if not relative_path:
         return ""
+
+    normalized_relative = relative_path.replace("\\", "/")
+    if not ENABLE_IMAGE_VERSIONING:
+        return f"/images/{normalized_relative}"
 
     image_path = _resolve_existing_image_path(relative_path)
     if not image_path:
         return ""
 
     version_suffix = f"?v={int(image_path.stat().st_mtime)}"
-    return f"/images/{relative_path.replace('\\', '/')}{version_suffix}"
+    return f"/images/{normalized_relative}{version_suffix}"
 
 
 def _build_image_lookup() -> dict[str, list[tuple[str, str]]]:
@@ -948,6 +998,60 @@ def _catalog_sources_signature() -> tuple:
     return tuple(entries)
 
 
+def _signature_to_json(signature: tuple) -> list[list]:
+    return [list(item) for item in signature]
+
+
+def _save_runtime_catalog_cache(source_store: dict[str, dict], signature: tuple) -> None:
+    payload = {
+        "version": 1,
+        "signature": _signature_to_json(signature),
+        "catalogs": {
+            source_key: store.get("catalog", [])
+            for source_key, store in source_store.items()
+        },
+    }
+    try:
+        RUNTIME_CATALOG_CACHE_PATH.write_text(
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
+    except OSError as error:
+        logger.warning("Failed to write runtime catalog cache: %s", error)
+
+
+def _load_runtime_catalog_cache(signature: tuple) -> dict[str, dict] | None:
+    if not RUNTIME_CATALOG_CACHE_PATH.exists():
+        return None
+
+    try:
+        payload = json.loads(RUNTIME_CATALOG_CACHE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        logger.warning("Failed to read runtime catalog cache: %s", error)
+        return None
+
+    if not isinstance(payload, dict) or payload.get("version") != 1:
+        return None
+
+    cached_signature = payload.get("signature")
+    if cached_signature != _signature_to_json(signature):
+        return None
+
+    catalogs = payload.get("catalogs")
+    if not isinstance(catalogs, dict):
+        return None
+
+    source_store: dict[str, dict] = {}
+    for source_key in CATALOG_SOURCES.keys():
+        catalog = catalogs.get(source_key, [])
+        if not isinstance(catalog, list):
+            catalog = []
+        source_store[source_key] = _build_source_store(catalog)
+
+    logger.info("Loaded runtime catalog cache from %s", RUNTIME_CATALOG_CACHE_PATH.name)
+    return source_store
+
+
 def _load_kohler_locked_index() -> dict[str, dict]:
     for locked_path in KOHLER_LOCKED_PRODUCTS_PATHS:
         if not locked_path.exists():
@@ -1054,8 +1158,20 @@ def _kohler_locked_lookup(query: str) -> dict | None:
     return None
 
 
-SOURCE_STORE = load_catalogs()
-_CATALOG_SOURCES_SIGNATURE = _catalog_sources_signature()
+SOURCE_STORE: dict[str, dict] = {}
+_CATALOG_SOURCES_SIGNATURE: tuple = tuple()
+
+
+@app.middleware("http")
+async def request_timing_middleware(request: Request, call_next):
+    started = time.perf_counter()
+    response = await call_next(request)
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    response.headers["X-Response-Time-MS"] = f"{elapsed_ms:.2f}"
+    response.headers["X-Uptime-S"] = f"{(time.perf_counter() - _SERVER_STARTED_AT):.1f}"
+    if request.url.path in {"/search", "/autocomplete", "/health", "/api/health"}:
+        logger.info("%s %s %.2fms", request.method, request.url.path, elapsed_ms)
+    return response
 
 
 @app.on_event("startup")
@@ -1064,14 +1180,37 @@ def _startup_load_catalogs() -> None:
 
     print("[startup] loading catalogs")
     _log_kohler_runtime_paths()
-    SOURCE_STORE = load_catalogs()
-    _CATALOG_SOURCES_SIGNATURE = _catalog_sources_signature()
+    current_signature = _catalog_sources_signature()
+    cached_store = _load_runtime_catalog_cache(current_signature)
+    if cached_store is not None:
+        SOURCE_STORE = cached_store
+        _CATALOG_SOURCES_SIGNATURE = current_signature
+    else:
+        SOURCE_STORE = load_catalogs()
+        _CATALOG_SOURCES_SIGNATURE = _catalog_sources_signature()
+        _save_runtime_catalog_cache(SOURCE_STORE, _CATALOG_SOURCES_SIGNATURE)
+    _resolve_existing_image_path_cached.cache_clear()
     print("[startup] catalog counts:", {source_key: len(store.get("catalog", [])) for source_key, store in SOURCE_STORE.items()})
 
 
 def _ensure_catalogs_loaded() -> None:
     """Reload catalog data when any source file has changed on disk."""
-    global SOURCE_STORE, _CATALOG_SOURCES_SIGNATURE
+    global SOURCE_STORE, _CATALOG_SOURCES_SIGNATURE, _LAST_CATALOG_RELOAD_CHECK_TS
+
+    if not SOURCE_STORE:
+        SOURCE_STORE = load_catalogs()
+        _CATALOG_SOURCES_SIGNATURE = _catalog_sources_signature()
+        _save_runtime_catalog_cache(SOURCE_STORE, _CATALOG_SOURCES_SIGNATURE)
+        _resolve_existing_image_path_cached.cache_clear()
+        return
+
+    if not ENABLE_CATALOG_AUTO_RELOAD:
+        return
+
+    now = time.monotonic()
+    if CATALOG_RELOAD_INTERVAL_SECONDS > 0 and (now - _LAST_CATALOG_RELOAD_CHECK_TS) < CATALOG_RELOAD_INTERVAL_SECONDS:
+        return
+    _LAST_CATALOG_RELOAD_CHECK_TS = now
 
     latest_signature = _catalog_sources_signature()
     if latest_signature == _CATALOG_SOURCES_SIGNATURE:
@@ -1079,6 +1218,8 @@ def _ensure_catalogs_loaded() -> None:
 
     SOURCE_STORE = load_catalogs()
     _CATALOG_SOURCES_SIGNATURE = latest_signature
+    _save_runtime_catalog_cache(SOURCE_STORE, _CATALOG_SOURCES_SIGNATURE)
+    _resolve_existing_image_path_cached.cache_clear()
 
 
 def _fallback_files_status() -> dict[str, bool]:
@@ -1647,7 +1788,7 @@ def _serialize_product(request: Request, product: dict) -> dict:
             relative = image_relative_path(raw_product_image)
             if source_key == "kohler" and relative and not relative.startswith("Kohler/"):
                 relative = f"Kohler/{relative}"
-            if relative and _resolve_existing_image_path(relative):
+            if relative and (not ENABLE_IMAGE_VALIDATION or _resolve_existing_image_path(relative)):
                 image = f"/images/{relative}"
 
         if not image:
@@ -1655,17 +1796,23 @@ def _serialize_product(request: Request, product: dict) -> dict:
             if expected_image_file:
                 if source_key == "kohler":
                     kohler_relative = f"Kohler/{expected_image_file}"
-                    expected_image_path = _resolve_existing_image_path(kohler_relative)
-                    if expected_image_path:
+                    expected_image_path_exists = (not ENABLE_IMAGE_VALIDATION) or bool(
+                        _resolve_existing_image_path(kohler_relative)
+                    )
+                    if expected_image_path_exists:
                         image = f"/images/{kohler_relative}"
                 else:
-                    expected_image_path = _resolve_existing_image_path(expected_image_file)
-                    if expected_image_path:
+                    expected_image_path_exists = (not ENABLE_IMAGE_VALIDATION) or bool(
+                        _resolve_existing_image_path(expected_image_file)
+                    )
+                    if expected_image_path_exists:
                         image = f"/images/{expected_image_file}"
 
         if not image:
             fallback_relative = _fallback_image_by_code(code_value, source_key)
-            if fallback_relative and _resolve_existing_image_path(fallback_relative):
+            if fallback_relative and (
+                (not ENABLE_IMAGE_VALIDATION) or _resolve_existing_image_path(fallback_relative)
+            ):
                 image = f"/images/{fallback_relative}"
 
         if image and str(image).startswith("/"):
@@ -1673,14 +1820,21 @@ def _serialize_product(request: Request, product: dict) -> dict:
             if relative_image.startswith("/images/"):
                 relative_image = relative_image.removeprefix("/images/")
 
-            image_path = _resolve_existing_image_path(relative_image)
-            if image_path:
-                version = f"?v={int(image_path.stat().st_mtime)}"
-                image = f"{str(request.base_url).rstrip('/')}/images/{relative_image}{version}"
+            if ENABLE_IMAGE_VERSIONING:
+                image_path = _resolve_existing_image_path(relative_image)
+                if image_path:
+                    version = f"?v={int(image_path.stat().st_mtime)}"
+                    image = f"{str(request.base_url).rstrip('/')}/images/{relative_image}{version}"
+                else:
+                    image = f"{str(request.base_url).rstrip('/')}/images/{relative_image}"
+            else:
+                image = f"{str(request.base_url).rstrip('/')}/images/{relative_image}"
 
         if source_key == "kohler" and image:
             kohler_relative = image_relative_path(image)
-            if not kohler_relative.startswith("Kohler/") or not _resolve_existing_image_path(kohler_relative):
+            if not kohler_relative.startswith("Kohler/"):
+                image = None
+            elif ENABLE_IMAGE_VALIDATION and not _resolve_existing_image_path(kohler_relative):
                 image = None
 
     base_code_value = product.get("base_code")
@@ -1744,10 +1898,16 @@ def _serialize_product(request: Request, product: dict) -> dict:
         override_image = str(override.get("image") or "").strip()
         if override_image:
             relative = image_relative_path(override_image)
-            resolved = _resolve_existing_image_path(relative)
-            if resolved:
-                version = f"?v={int(resolved.stat().st_mtime)}"
-                serialized["image"] = f"{str(request.base_url).rstrip('/')}/images/{relative}{version}"
+            if not ENABLE_IMAGE_VALIDATION or _resolve_existing_image_path(relative):
+                if ENABLE_IMAGE_VERSIONING:
+                    resolved = _resolve_existing_image_path(relative)
+                    if resolved:
+                        version = f"?v={int(resolved.stat().st_mtime)}"
+                        serialized["image"] = f"{str(request.base_url).rstrip('/')}/images/{relative}{version}"
+                    else:
+                        serialized["image"] = f"{str(request.base_url).rstrip('/')}/images/{relative}"
+                else:
+                    serialized["image"] = f"{str(request.base_url).rstrip('/')}/images/{relative}"
                 serialized["hasImage"] = True
 
     combined_products = product.get("combined_products")
@@ -1827,6 +1987,7 @@ def search(
     query: str = Query(default=""),
     catalog: str = Query(default="all"),
 ):
+    started = time.perf_counter()
     _ensure_catalogs_loaded()
     effective_query = (q or query or "").strip()
 
@@ -1853,6 +2014,8 @@ def search(
             or _image_only_query_results(effective_query, source_key)
         )
         for match in source_matches:
+            if _is_manually_removed_code(match.get("code", "")):
+                continue
             unique_key = (
                 source_key,
                 normalize_code(match.get("code", "")),
@@ -1882,19 +2045,31 @@ def search(
             )
             seen_keys.add(synthetic_key)
 
-    return {
-        "results": matches[:50],
+    compact = normalize_code(effective_query)
+    result_limit = 20 if len(compact) < 4 else 50
+    response = {
+        "results": matches[:result_limit],
     }
+    logger.info(
+        "search q=%r catalog=%s results=%d elapsed=%.2fms",
+        effective_query,
+        selected_catalog,
+        len(response["results"]),
+        (time.perf_counter() - started) * 1000,
+    )
+    return response
 
 
 @app.get("/autocomplete")
 def autocomplete(
+    request: Request,
     q: str = Query(default=""),
     query: str = Query(default=""),
     catalog: str = Query(default="all"),
     limit: int = Query(default=10, ge=1, le=20),
 ):
     """Get autocomplete suggestions based on prefix matching."""
+    started = time.perf_counter()
     _ensure_catalogs_loaded()
     effective_query = (q or query or "").strip()
 
@@ -1916,12 +2091,21 @@ def autocomplete(
     for source_key in source_keys:
         source_suggestions = _get_autocomplete_suggestions(effective_query, source_key, limit)
         for suggestion in source_suggestions:
+            if _is_manually_removed_code(suggestion.get("code", "")):
+                continue
             code_key = normalize_code(suggestion.get("code", ""))
             if code_key not in seen_codes:
+                serialized = _serialize_product(request, suggestion)
+                image_value = serialized.get("image")
+                image_relative = image_relative_path(image_value) if image_value else ""
+                if image_relative:
+                    image_value = f"/images/{image_relative}"
                 suggestions.append({
                     "code": suggestion.get("code", ""),
                     "name": suggestion.get("name", ""),
                     "source": suggestion.get("source", ""),
+                    "image": image_value,
+                    "hasImage": bool(serialized.get("hasImage")),
                 })
                 seen_codes.add(code_key)
                 if len(suggestions) >= limit:
@@ -1930,9 +2114,18 @@ def autocomplete(
         if len(suggestions) >= limit:
             break
     
-    return {
+    response = {
         "suggestions": suggestions[:limit]
     }
+    logger.info(
+        "autocomplete q=%r catalog=%s limit=%d results=%d elapsed=%.2fms",
+        effective_query,
+        selected_catalog,
+        limit,
+        len(response["suggestions"]),
+        (time.perf_counter() - started) * 1000,
+    )
+    return response
 
 
 @app.post("/generate-pdf")

@@ -34,6 +34,7 @@ backend/*.log
 backend/*.out
 backend/*.err
 backend/*_report.json
+backend/.runtime_catalog_cache.json
 backend/inspection_report_utf8.txt
 backend/inspect_output.txt
 backend/images_out.txt
@@ -49,6 +50,7 @@ backend/kohler_test_cache.json
 !backend/kohler_catalog_full.xlsx
 
 # Archives/binaries
+backend/*.rar
 **/*.zip
 **/*.exe
 **/*.msi

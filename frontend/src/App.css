@@ -274,10 +274,36 @@ body {
 }
 
 .suggestion-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  background: #fff;
+  color: var(--text);
+  border: none;
+  border-radius: 0;
   padding: 12px 16px;
   border-bottom: 1px solid var(--line);
   cursor: pointer;
   transition: background-color 0.15s;
+}
+
+.suggestion-thumb {
+  width: 42px;
+  height: 42px;
+  object-fit: contain;
+  flex-shrink: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  padding: 3px;
+}
+
+.suggestion-meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .suggestion-item:last-child {
@@ -295,9 +321,13 @@ body {
 }
 
 .suggestion-name {
+  display: block;
   font-size: 12px;
   color: var(--text-muted);
   margin-top: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .suggestion-source {
@@ -333,7 +363,7 @@ body {
   box-shadow: 0 0 0 4px var(--accent-soft);
 }
 
-.search-form button {
+.search-form > button {
   padding: 0 32px;
   height: 54px;
   border-radius: 12px;
@@ -466,6 +496,36 @@ body {
   background: #fff;
   padding: 8px 10px 16px;
   box-sizing: border-box;
+}
+
+.image-placeholder {
+  position: absolute;
+  inset: 8px 10px 16px;
+  border-radius: 8px;
+  border: 1px dashed #cbd5e1;
+  background: linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%);
+  background-size: 200% 100%;
+  animation: imagePulse 1.2s linear infinite;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.image-placeholder.is-hidden {
+  display: none;
+}
+
+@keyframes imagePulse {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
 }
 
 .variant-image-wrap img {
@@ -704,6 +764,13 @@ body {
   gap: 12px;
 }
 
+.product-thumb-wrap {
+  position: relative;
+  width: 80px;
+  height: 80px;
+  flex-shrink: 0;
+}
+
 .product-info-cell img {
   width: 80px;
   height: 80px;
@@ -711,6 +778,10 @@ body {
   border-radius: 12px;
   border: 1px solid var(--line);
   padding: 4px;
+}
+
+.table-image-placeholder {
+  inset: 0;
 }
 
 .product-info-cell span {
