@@ -1,31 +1,42 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import App from "./App";
 import { generateQuotationPDF } from "./pdf/quotationPdf";
 
-jest.mock("axios", () => {
-  const mockAxios = {
-    get: jest.fn(),
-    isCancel: jest.fn(() => false),
-  };
+jest.mock("./lib/api", () => ({
+  fetchClients: jest.fn(() => Promise.resolve({ results: [] })),
+  fetchManagedProducts: jest.fn(() => Promise.resolve({ results: [] })),
+  fetchQuotations: jest.fn(() => Promise.resolve({ results: [] })),
+  fetchQuotationProposalNumber: jest.fn(() => Promise.resolve({ proposal_no: "PROP-20260428-001" })),
+  fetchAutocompleteSuggestions: jest.fn(() => Promise.resolve({ suggestions: [] })),
+  fetchQuotationPdf: jest.fn(() => Promise.resolve(new Blob(["pdf"]))),
+  createQuotation: jest.fn(),
+  updateQuotation: jest.fn(),
+  fetchQuotation: jest.fn(),
+  getQuotationPdfUrl: jest.fn(() => "http://127.0.0.1:8001/quotations/1/pdf"),
+  createClient: jest.fn(),
+  updateClient: jest.fn(),
+  deleteClient: jest.fn(),
+  createManagedProduct: jest.fn(),
+  updateManagedProduct: jest.fn(),
+  deleteManagedProduct: jest.fn(),
+  deleteQuotation: jest.fn(),
+  getErrorMessage: jest.fn((error, fallback) => fallback || "Error"),
+}));
 
-  return {
-    __esModule: true,
-    default: mockAxios,
-  };
-});
-
-test("renders the quotation workspace search input", () => {
+test("renders the create quotation workspace", async () => {
+  window.location.hash = "#create-bom";
   render(<App />);
 
   expect(
-    screen.getByRole("heading", { name: /client information/i })
+    screen.getByText(/quotation management system/i)
   ).toBeInTheDocument();
 
-  expect(
-    screen.getByPlaceholderText(/type code/i)
-  ).toBeInTheDocument();
+  await waitFor(() => {
+    expect(screen.getByRole("heading", { name: /create quotation/i })).toBeInTheDocument();
+  });
 
-  expect(screen.getByRole("button", { name: /view pdf/i })).toBeInTheDocument();
+  expect(screen.getByPlaceholderText(/search by code, product name/i)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /save draft/i })).toBeInTheDocument();
 });
 
 test("generates a non-empty quotation pdf blob", async () => {

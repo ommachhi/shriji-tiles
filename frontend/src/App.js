@@ -1,1061 +1,625 @@
-import React, { useMemo, useState, useEffect, useRef, useCallback } from "react";
-import axios from "axios";
+import React, { startTransition, useCallback, useEffect, useRef, useState } from "react";
 import "./App.css";
-import { buildProposalFileName, generateQuotationPDF } from "./pdf/quotationPdf";
+import AppShell from "./components/AppShell";
+import { ToastContainer } from "./components/ToastContainer";
+import { useBomWorkspace } from "./hooks/useBomWorkspace";
+import { useToast } from "./hooks/useToast";
+import {
+  createClient,
+  createManagedProduct,
+  deleteClient,
+  deleteManagedProduct,
+  deleteQuotation,
+  fetchClients,
+  fetchManagedProducts,
+  fetchQuotation,
+  fetchQuotationPdf,
+  fetchQuotations,
+  getErrorMessage,
+  updateClient,
+  updateManagedProduct,
+} from "./lib/api";
+import { getPageFromHash, PUBLIC_ASSET_BASE_URL } from "./lib/constants";
+import { generateQuotationPDF } from "./pdf/quotationPdf";
+import { PdfModal } from "./components/PdfModal";
+import { appendLocalEntry, localStoreKeys, readLocalCollection, removeLocalEntry, upsertLocalEntry } from "./lib/localStore";
 
-const defaultBackendUrl =
-  process.env.NODE_ENV === "development"
-    ? "http://127.0.0.1:8001"
-    : "https://shriji-tiles.onrender.com";
+import CreateBomPage from "./pages/CreateBomPage";
+import BomListPage from "./pages/BomListPage";
+import ClientsPage from "./pages/ClientsPage";
+import ProductsPage from "./pages/ProductsPage";
+import QuotationViewPage from "./pages/QuotationViewPage";
 
-const runtimeBackendUrl =
-  (typeof window !== "undefined" && window.desktopConfig?.backendUrl) ||
-  process.env.REACT_APP_BACKEND_URL ||
-  defaultBackendUrl;
-
-const BACKEND_BASE_URL = runtimeBackendUrl.replace(/\/+$/, "");
-const PUBLIC_ASSET_BASE_URL =
-  process.env.REACT_APP_PUBLIC_ASSET_BASE_URL ||
-  BACKEND_BASE_URL;
-const PUBLIC_FALLBACK_IMAGE_PATH = "/assets/fallback-product.svg";
-const API_URL = `${BACKEND_BASE_URL}/search`;
-
-const currencyFormatter = new Intl.NumberFormat("en-IN", {
-  style: "currency",
-  currency: "INR",
-  maximumFractionDigits: 0,
-});
-
-const catalogOptions = [
-  { id: "all", label: "All" },
-  { id: "aquant", label: "Aquant" },
-  { id: "kohler", label: "Kohler" },
-];
-
-const variantOrder = ["BRG", "BG", "GG", "MB", "CP", "RG", "AB", "G"];
-
-const roomOptions = [
-  "Kid's Bathroom",
-  "Guest Bathroom",
-  "Parent's Bathroom",
-  "Master Bathroom",
-  "Common / Powder Room",
-  "Living Room",
-  "Kitchen",
-  "Balcony",
-  "Utility Room",
-];
-
-function buildPlaceholder(productName = "Catalog product") {
-  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(`
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 420">
-      <rect width="640" height="420" rx="18" fill="#ededed" />
-      <rect x="40" y="40" width="560" height="340" rx="14" fill="#f6f6f6" stroke="#d5d5d5" stroke-width="4" />
-      <text x="320" y="194" text-anchor="middle" font-size="44" font-weight="700" font-family="Arial, sans-serif" fill="#5d5d5d">
-        IMAGE NOT FOUND
-      </text>
-      <text x="320" y="236" text-anchor="middle" font-size="18" font-family="Arial, sans-serif" fill="#7a7a7a">
-        ${productName.replace(/[<&>]/g, "").slice(0, 44)}
-      </text>
-    </svg>
-  `)}`;
-}
-
-function parseCodeParts(value) {
-  const text = String(value || "").trim().toUpperCase();
-  const baseMatch = text.match(/(\d{3,5})/);
-  if (!baseMatch) {
-    return { baseCode: "", variant: "" };
-  }
-
-  const baseCode = baseMatch[1];
-  const tail = text.slice(baseMatch.index + baseCode.length).replace(/[^A-Z0-9]+/g, "").trim();
-  return { baseCode, variant: tail.slice(0, 6) };
-}
-
-function coercePrice(value) {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return Math.max(0, Math.round(value));
-  }
-
-  const text = String(value ?? "").trim();
-  if (!text) {
-    return 0;
-  }
-
-  const match = text.replace(/,/g, "").match(/\d+(?:\.\d{1,2})?/);
-  if (!match) {
-    return 0;
-  }
-
-  const parsed = Number(match[0]);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return 0;
-  }
-
-  return Math.round(parsed);
-}
-
-function isLocalHost(hostname) {
-  return /^(localhost|127\.0\.0\.1|::1)$/i.test(String(hostname || "").trim());
-}
-
-function toAbsolutePublicUrl(value, baseUrl = PUBLIC_ASSET_BASE_URL) {
-  const raw = String(value || "").trim();
-  if (!raw) {
-    return "";
-  }
-
-  if (raw.startsWith("data:image") || raw.startsWith("blob:")) {
-    return raw;
-  }
-
-  try {
-    const base = new URL(String(baseUrl || PUBLIC_ASSET_BASE_URL).trim() || PUBLIC_ASSET_BASE_URL);
-    const parsed = new URL(raw, base);
-
-    if (!["http:", "https:"].includes(parsed.protocol)) {
-      return "";
-    }
-
-    if (isLocalHost(parsed.hostname) && !isLocalHost(base.hostname)) {
-      return `${base.origin}${parsed.pathname}${parsed.search}${parsed.hash}`;
-    }
-
-    return parsed.toString();
-  } catch (error) {
-    return "";
-  }
-}
-
-function uniqueNonEmpty(values) {
-  const seen = new Set();
-  const result = [];
-
-  (Array.isArray(values) ? values : []).forEach((value) => {
-    const normalized = String(value || "").trim();
-    if (!normalized || seen.has(normalized)) {
-      return;
-    }
-    seen.add(normalized);
-    result.push(normalized);
+function sortQuotesByDate(quotes) {
+  return [...quotes].sort((left, right) => {
+    const leftTime = new Date(left.date || left.created_at || 0).getTime();
+    const rightTime = new Date(right.date || right.created_at || 0).getTime();
+    return rightTime - leftTime;
   });
-
-  return result;
 }
 
-function getPublicFallbackImageUrl() {
-  const runtimeBase =
-    typeof window !== "undefined" && window.location?.origin
-      ? window.location.origin
-      : PUBLIC_ASSET_BASE_URL;
-
-  return toAbsolutePublicUrl(PUBLIC_FALLBACK_IMAGE_PATH, runtimeBase);
-}
-
-function normalizeImageUrl(value) {
-  const raw = String(value || "").trim();
-  if (!raw) {
-    return "";
-  }
-
-  const candidates = uniqueNonEmpty([
-    toAbsolutePublicUrl(raw, BACKEND_BASE_URL),
-    toAbsolutePublicUrl(raw, PUBLIC_ASSET_BASE_URL),
-  ]);
-
-  return candidates[0] || "";
-}
-
-function buildProductImageUrl(product) {
-  const primary = normalizeImageUrl(product?.image);
-  if (primary) {
-    return primary;
-  }
-
-  return getPublicFallbackImageUrl() || buildPlaceholder(product?.name);
-}
-
-function handleProductImageError(event, product) {
-  const target = event.currentTarget;
-  target.dataset.fallbackCount = "1";
-  target.src = getPublicFallbackImageUrl() || buildPlaceholder(product?.name);
-}
-
-async function isDirectImageUrlAccessible(url) {
-  const target = String(url || "").trim();
-  if (!target || target.startsWith("data:image") || target.startsWith("blob:")) {
-    return Boolean(target);
-  }
-
-  try {
-    const response = await fetch(target);
-
-    if (!response.ok) {
-      console.warn("Image URL fetch failed", { url: target, status: response.status });
-      return false;
+function mergeById(localArray, remoteArray) {
+  const idMap = {};
+  (remoteArray || []).forEach((item) => {
+    idMap[item.id] = item;
+  });
+  (localArray || []).forEach((item) => {
+    if (item.id && !idMap[item.id]) {
+      idMap[item.id] = item;
     }
-
-    const contentType = String(response.headers.get("content-type") || "").toLowerCase();
-    const isImage = contentType.includes("image/");
-    if (!isImage) {
-      console.warn("Image URL returned non-image content", { url: target, contentType });
-    }
-    return isImage;
-  } catch (error) {
-    console.warn("Image URL fetch threw error", {
-      url: target,
-      message: error?.message || String(error),
-    });
-    return false;
-  }
+  });
+  return Object.values(idMap);
 }
 
-async function resolvePdfImageUrl(item) {
-  const normalized = normalizeImageUrl(item?.image);
-  const raw = String(item?.image || "").trim();
-  const candidates = uniqueNonEmpty([
-    normalized,
-    toAbsolutePublicUrl(raw, PUBLIC_ASSET_BASE_URL),
-    toAbsolutePublicUrl(raw, BACKEND_BASE_URL),
-    toAbsolutePublicUrl(raw.split("?")[0], PUBLIC_ASSET_BASE_URL),
-  ]);
-
-  for (const candidate of candidates) {
-    if (await isDirectImageUrlAccessible(candidate)) {
-      return candidate;
-    }
-  }
-
-  const fallbackUrl = getPublicFallbackImageUrl();
-  if (await isDirectImageUrlAccessible(fallbackUrl)) {
-    return fallbackUrl;
-  }
-
-  return buildPlaceholder(item?.name);
+function isNumericId(value) {
+  return /^\d+$/.test(String(value || "").trim());
 }
 
-function normalizeSnippet(value) {
-  return String(value || "").replace(/\s+/g, " ").trim();
-}
+function buildClientSnapshotFromQuote(quote) {
+  const clientName = String(quote?.client_name || quote?.clientName || "").trim();
+  const phone = String(quote?.phone || "").trim();
+  const email = String(quote?.email || "").trim();
+  const address = String(quote?.address || "").trim();
+  const company = String(quote?.company || "").trim();
+  const clientId = quote?.client_id ?? quote?.clientId ?? null;
 
-function buildDisplayName(product) {
-  const words = normalizeSnippet(product.name)
-    .split(" ")
-    .filter(Boolean)
-    .filter((word, index, array) => {
-      if (index === 0) {
-        return true;
-      }
-      return word.toLowerCase() !== array[index - 1].toLowerCase();
-    });
-
-  if (words.length <= 2) {
-    return words.join(" ");
+  if (!clientName && !phone && !email && !address && !company) {
+    return null;
   }
 
-  return words.slice(0, 2).join(" ");
+  return {
+    id: clientId ? String(clientId) : `local-client-${String(quote?.id || Date.now())}`,
+    client_name: clientName || phone || "Client",
+    company,
+    phone,
+    email,
+    address,
+    gst_rate: Number(quote?.gst_rate ?? quote?.gstRate ?? 18) || 18,
+  };
 }
+
+function toPlainNoticeText(value) {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => toPlainNoticeText(item)).filter(Boolean).join("; ");
+  }
+  if (value && typeof value === "object") {
+    return value.msg || value.message || value.detail || JSON.stringify(value);
+  }
+  return value == null ? "" : String(value);
+}
+
+function buildPdfDownloadName(quote) {
+  return `${String(quote?.proposal_no || "quotation")
+    .replace(/[^a-z0-9_.-]+/gi, "_")
+    .replace(/^_+|_+$/g, "") || "quotation"}.pdf`;
+}
+
+function getLocalQuoteById(quoteId) {
+  if (!quoteId) {
+    return null;
+  }
+
+  const localQuotes = readLocalCollection(localStoreKeys.quotes);
+  return (Array.isArray(localQuotes) ? localQuotes : []).find((quote) => String(quote.id) === String(quoteId)) || null;
+}
+
+function downloadBlob(blob, fileName) {
+  const objectUrl = window.URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => window.URL.revokeObjectURL(objectUrl), 1000);
+}
+
 
 
 function App() {
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState([]);
-  const [suggestions, setSuggestions] = useState([]);
-  const [activeCatalog, setActiveCatalog] = useState("all");
-  const [loading, setLoading] = useState(false);
-  const [hasSearched, setHasSearched] = useState(false);
-  const [showSuggestions, setShowSuggestions] = useState(false);
-  const [pdfPreviewUrl, setPdfPreviewUrl] = useState("");
-  const [pdfZoom, setPdfZoom] = useState(100);
-  const [pdfGenerating, setPdfGenerating] = useState(false);
-  const [loadedImages, setLoadedImages] = useState({});
-  const [imagePreview, setImagePreview] = useState({
-    isOpen: false,
-    src: "",
-    title: "",
-    zoom: 1,
-  });
+  const [activePage, setActivePage] = useState(() => getPageFromHash());
+  const [clients, setClients] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [quotes, setQuotes] = useState([]);
+  const [selectedQuote, setSelectedQuote] = useState(null);
+  const [bootstrapping, setBootstrapping] = useState(true);
+  const [notice, setNotice] = useState(null);
+  const [pdfModal, setPdfModal] = useState({ isOpen: false, loading: false, url: null, error: null, filename: null, isDraft: false, retryFn: null });
+  const quoteCacheRef = useRef({});
+  const pdfCacheRef = useRef({});
+  const { toasts, showToast, dismissToast } = useToast();
 
-  // Client State
-  const [clientInfo, setClientInfo] = useState({
-    preparedBy: "Jagdish",
-    proposalNo: `PRO-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}`,
-    clientName: "",
-    phone: "",
-    company: "",
-    email: "",
-    address: "",
-    gstCompliance: false,
-    gstPercentage: 18
-  });
-
-  // Discount State
-  const [discountConfig, setDiscountConfig] = useState({
-    method: "item-wise", // "item-wise", "common", "total"
-    bulkDiscount: 0,
-    flatDiscount: 0,
-    watermark: true
-  });
-
-  // BOM State
-  const [bom, setBom] = useState([]);
-  const searchAbortRef = useRef(null);
-  const searchRequestIdRef = useRef(0);
-  const suggestionRequestIdRef = useRef(0);
-
-  useEffect(() => {
-    setQuery("");
-    setResults([]);
-    setSuggestions([]);
-    setHasSearched(false);
-    setShowSuggestions(false);
-
-    // Warm backend once so first manual search is fast for the user.
-    axios.get(`${BACKEND_BASE_URL}/health`).catch(() => {
-      // Ignore warmup errors; normal search flow handles API failures.
-    });
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (pdfPreviewUrl) {
-        window.URL.revokeObjectURL(pdfPreviewUrl);
-      }
-      if (searchAbortRef.current) {
-        searchAbortRef.current.abort();
-      }
-    };
-  }, [pdfPreviewUrl]);
-
-  const searchRef = React.useRef(null);
-
-  const getImageKey = useCallback((product) => {
-    return `${product?.source || "na"}:${product?.code || ""}:${product?.image || ""}`;
-  }, []);
-
-  const markImageLoaded = useCallback((product) => {
-    const key = getImageKey(product);
-    if (!key) {
-      return;
-    }
-    setLoadedImages((prev) => {
-      if (prev[key]) {
-        return prev;
-      }
-      return { ...prev, [key]: true };
-    });
-  }, [getImageKey]);
-
-  const isImageLoaded = useCallback((product) => {
-    const key = getImageKey(product);
-    return Boolean(loadedImages[key]);
-  }, [getImageKey, loadedImages]);
-
-  useEffect(() => {
-    function handleClickOutside(event) {
-      if (searchRef.current && !searchRef.current.contains(event.target)) {
-        setHasSearched(false);
-        setShowSuggestions(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
-
-  // Debounce effect for suggestions only; full search executes on submit/select.
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      if (query.trim().length >= 1) {
-        fetchSuggestions(query.trim(), activeCatalog);
-      } else {
-        setResults([]);
-        setSuggestions([]);
-        setHasSearched(false);
-        setShowSuggestions(false);
-      }
-    }, 220);
-    return () => clearTimeout(timer);
-  }, [query, activeCatalog]);
-
-  async function fetchSuggestions(searchQuery, catalogId) {
-    if (!searchQuery || searchQuery.length < 1) {
-      setSuggestions([]);
-      return;
-    }
-    const requestId = ++suggestionRequestIdRef.current;
-    try {
-      const autocompleteUrl = `${BACKEND_BASE_URL}/autocomplete?q=${encodeURIComponent(searchQuery)}&catalog=${encodeURIComponent(catalogId)}&limit=8`;
-      const response = await axios.get(autocompleteUrl);
-      if (requestId !== suggestionRequestIdRef.current) {
-        return;
-      }
-      setSuggestions(response.data?.suggestions || []);
-      setShowSuggestions(true);
-    } catch (error) {
-      if (requestId !== suggestionRequestIdRef.current) {
-        return;
-      }
-      setSuggestions([]);
-    }
-  }
-
-  async function executeSearch(searchQuery, catalogId, options = {}) {
-    if (!searchQuery) return;
-    const { showLoading = true } = options;
-    const requestId = ++searchRequestIdRef.current;
-
-    if (searchAbortRef.current) {
-      searchAbortRef.current.abort();
-    }
-    const controller = new AbortController();
-    searchAbortRef.current = controller;
-
-    if (showLoading) {
-      setLoading(true);
-    }
-
-    try {
-      const requestUrl = `${API_URL}?q=${encodeURIComponent(searchQuery)}&catalog=${encodeURIComponent(catalogId)}`;
-      const started = performance.now();
-      const response = await axios.get(requestUrl, { signal: controller.signal });
-      if (requestId !== searchRequestIdRef.current) {
-        return;
-      }
-      const elapsedMs = performance.now() - started;
-      console.info("Search completed", { searchQuery, catalogId, elapsedMs: Math.round(elapsedMs) });
-      setResults(response.data?.results || []);
-      setHasSearched(true);
-    } catch (requestError) {
-      if (axios.isCancel(requestError) || requestError?.code === "ERR_CANCELED") {
-        return;
-      }
-      if (requestId !== searchRequestIdRef.current) {
-        return;
-      }
-      setResults([]);
-    } finally {
-      if (requestId === searchRequestIdRef.current && showLoading) {
-        setLoading(false);
-      }
-    }
-  }
-
-  const selectSuggestion = async (suggestion) => {
-    setQuery(suggestion.code);
-    setSuggestions([]);
-    setShowSuggestions(false);
-    await executeSearch(suggestion.code, activeCatalog, { showLoading: true });
-  };
-
-  async function runSearch(event) {
-    event.preventDefault();
-    if (query.trim()) {
-      setShowSuggestions(false);
-      await executeSearch(query.trim(), activeCatalog);
-    }
-  }
-
-  const groupedResults = useMemo(() => {
-    const groups = new Map();
-
-    for (const product of results) {
-      const parsed = parseCodeParts(product?.code);
-      const baseCode = product?.baseCode || parsed.baseCode || String(product?.code || "").trim();
-      const variant = String(product?.variant || parsed.variant || "").toUpperCase();
-      const isCp = Boolean(product?.isCp || variant === "CP");
-      const normalizedPrice = coercePrice(product?.price);
-
-      if (!groups.has(baseCode)) {
-        groups.set(baseCode, []);
-      }
-
-      groups.get(baseCode).push({
-        ...product,
-        price: normalizedPrice,
-        baseCode,
-        variant,
-        isCp,
-      });
-    }
-
-    return [...groups.entries()].map(([baseCode, items]) => {
-      items.sort((left, right) => {
-        const leftIndex = variantOrder.indexOf(left.variant);
-        const rightIndex = variantOrder.indexOf(right.variant);
-        const leftRank = leftIndex === -1 ? 99 : leftIndex;
-        const rightRank = rightIndex === -1 ? 99 : rightIndex;
-        if (leftRank !== rightRank) {
-          return leftRank - rightRank;
+  const notify = useCallback((payload) => {
+    const safePayload = payload
+      ? {
+          ...payload,
+          title: toPlainNoticeText(payload.title),
+          message: toPlainNoticeText(payload.message),
         }
-        return String(left.code || "").localeCompare(String(right.code || ""));
-      });
-      return { baseCode, items };
-    });
-  }, [results]);
+      : payload;
+    setNotice(safePayload);
+    if (payload?.title || payload?.message) {
+      const toastMessage = [toPlainNoticeText(payload.title), toPlainNoticeText(payload.message)].filter(Boolean).join(": ") || "Notification";
+      showToast(toastMessage, payload.tone || "info");
+    }
+  }, [showToast]);
 
-  const addToBom = (product) => {
-    const newItem = {
-      id: `${product.source}-${product.code}-${Date.now()}`,
-      code: product.code,
-      name: product.name,
-      displayName: buildDisplayName(product),
-      source: product.sourceLabel,
-      image: product.image,
-      size: product.size || "-",
-      color: product.color || "-",
-      qty: 1,
-      rate: coercePrice(product.price),
-      discount: 0, // row-specific discount %
-      room: "",
-    };
-    setBom((prev) => [...prev, newItem]);
-    setResults([]);
-    setQuery("");
-    setHasSearched(false);
-  };
-
-  const updateBomItem = (id, field, value) => {
-    setBom((prev) => prev.map((item) => item.id === id ? { ...item, [field]: value } : item));
-  };
-
-  const removeBomItem = (id) => {
-    setBom((prev) => prev.filter((item) => item.id !== id));
-  };
-
-  // --- CALCULATION LOGIC ---
-  const calculateRowAmount = (item) => {
-    const baseTotal = item.qty * item.rate;
-    let discPercent = 0;
+  const showPdfModal = useCallback((generatorFn, options = {}) => {
+    const { filename, isDraft } = options;
     
-    if (discountConfig.method === "item-wise") {
-      discPercent = item.discount;
-    } else if (discountConfig.method === "common") {
-      discPercent = discountConfig.bulkDiscount;
-    }
-
-    return baseTotal * (1 - discPercent / 100);
-  };
-
-  const subtotal = bom.reduce((acc, item) => acc + (item.qty * item.rate), 0);
-  const totalAfterItemDisc = bom.reduce((acc, item) => acc + calculateRowAmount(item), 0);
-  
-  let finalBeforeGst = totalAfterItemDisc;
-  if (discountConfig.method === "on-total") {
-    finalBeforeGst = Math.max(0, subtotal - discountConfig.flatDiscount);
-  }
-
-  const totalGst = clientInfo.gstCompliance ? (finalBeforeGst * (clientInfo.gstPercentage / 100)) : 0;
-  const grandTotal = finalBeforeGst + totalGst;
-
-  const closePdfPreview = () => {
-    if (pdfPreviewUrl) {
-      window.URL.revokeObjectURL(pdfPreviewUrl);
-      setPdfPreviewUrl("");
-      setPdfZoom(100);
-    }
-  };
-
-  const openImagePreview = (event, product) => {
-    if (event) {
-      event.stopPropagation();
-    }
-
-    setImagePreview({
-      isOpen: true,
-      src: buildProductImageUrl(product),
-      title: `${product?.code || ""} ${product?.name || ""}`.trim() || "Product image",
-      zoom: 1,
-    });
-  };
-
-  const closeImagePreview = () => {
-    setImagePreview({
-      isOpen: false,
-      src: "",
-      title: "",
-      zoom: 1,
-    });
-  };
-
-  const downloadPreviewPdf = () => {
-    if (!pdfPreviewUrl) return;
-    const link = document.createElement('a');
-    link.href = pdfPreviewUrl;
-    link.setAttribute('download', buildProposalFileName(new Date(), clientInfo.clientName));
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  const buildPdfData = async () => {
-    const products = await Promise.all(
-      bom.map(async (item) => ({
-        name: item.name,
-        sku: item.code,
-        size: item.size,
-        qty: item.qty,
-        rate: item.rate,
-        discount: discountConfig.method === "common" ? discountConfig.bulkDiscount : item.discount,
-        amount: calculateRowAmount(item),
-        image: await resolvePdfImageUrl(item),
-        room: Array.isArray(item.room) ? item.room : item.room ? [item.room] : [],
-        details: item.displayName ? `${item.displayName}` : item.name,
-        color: item.color,
-        source: item.source,
-        mrp: item.rate,
-      }))
-    );
-
-    return {
-      clientInfo: {
-        ...clientInfo,
-        mobile: clientInfo.phone,
-        name: clientInfo.clientName,
-      },
-      proposalNo: clientInfo.proposalNo,
-      date: new Date().toISOString(),
-      products,
-      gstRate: clientInfo.gstPercentage,
-      publicAssetBase: PUBLIC_ASSET_BASE_URL,
-    };
-  };
-
-  const generatePdf = async (preview = false) => {
-    if (bom.length === 0) return alert("Add items first");
-    setPdfGenerating(true);
-    try {
-      const payload = await buildPdfData();
-      const pdfBlob = await generateQuotationPDF(payload, {
-        branding: discountConfig.watermark,
-        download: !preview,
-        preview,
-        publicAssetBase: PUBLIC_ASSET_BASE_URL,
-        onImageValidation: (report) => {
-          if (!report?.ok) {
-            console.warn("PDF SKU-image validation report:", report);
-          }
-        },
-        previewTarget: preview
-          ? (url) => {
-              if (pdfPreviewUrl) {
-                window.URL.revokeObjectURL(pdfPreviewUrl);
-              }
-              setPdfPreviewUrl(url);
-            }
-          : undefined,
-        filename: buildProposalFileName(payload.date, clientInfo.clientName),
-      });
-
-      if (preview) {
-        setPdfZoom(100);
-        return pdfBlob;
+    const execute = async () => {
+      setPdfModal({ isOpen: true, loading: true, url: null, error: null, filename, isDraft, retryFn: execute });
+      try {
+        const blob = await generatorFn();
+        const url = window.URL.createObjectURL(blob);
+        setPdfModal((prev) => prev.isOpen ? { ...prev, loading: false, url, error: null } : prev);
+      } catch (err) {
+        setPdfModal((prev) => prev.isOpen ? { ...prev, loading: false, url: null, error: getErrorMessage(err, "Failed to generate PDF") } : prev);
       }
-    } catch (err) {
-      console.error("PDF Error:", err);
-      alert("Failed to generate PDF");
-    } finally {
-      setPdfGenerating(false);
+    };
+    
+    execute();
+  }, []);
+
+  const closePdfModal = useCallback(() => {
+    setPdfModal(prev => {
+      if (prev.url) window.URL.revokeObjectURL(prev.url);
+      return { isOpen: false, loading: false, url: null, error: null, filename: null, isDraft: false, retryFn: null };
+    });
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return undefined;
     }
-  };
+
+    if (!window.location.hash) {
+      window.location.hash = activePage;
+    }
+
+    const handleHashChange = () => setActivePage(getPageFromHash());
+    window.addEventListener("hashchange", handleHashChange);
+    return () => window.removeEventListener("hashchange", handleHashChange);
+  }, [activePage]);
+
+  useEffect(() => {
+    if (!notice) {
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => setNotice(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
+  const navigateTo = useCallback((pageId) => {
+    if (typeof window !== "undefined" && window.location.hash !== `#${pageId}`) {
+      window.location.hash = pageId;
+    }
+    startTransition(() => setActivePage(pageId));
+  }, []);
+
+  const upsertQuote = useCallback((quote) => {
+    if (!quote?.id) {
+      return;
+    }
+    quoteCacheRef.current[quote.id] = quote;
+    upsertLocalEntry(localStoreKeys.quotes, quote);
+    const clientSnapshot = buildClientSnapshotFromQuote(quote);
+    if (clientSnapshot) {
+      if (quote?.client_id || quote?.clientId) {
+        upsertLocalEntry(localStoreKeys.clients, clientSnapshot);
+        setClients((prev) =>
+          [...prev.filter((client) => String(client.id) !== String(clientSnapshot.id)), clientSnapshot].sort((left, right) =>
+            String(left.client_name || "").localeCompare(String(right.client_name || ""))
+          )
+        );
+      } else {
+        appendLocalEntry(localStoreKeys.clients, clientSnapshot);
+        setClients((prev) => [clientSnapshot, ...prev].sort((left, right) =>
+          String(left.client_name || "").localeCompare(String(right.client_name || ""))
+        ));
+      }
+    }
+    setQuotes((prev) => sortQuotesByDate([quote, ...prev.filter((entry) => entry.id !== quote.id)]));
+    setSelectedQuote((prev) => (prev?.id === quote.id ? quote : prev));
+  }, []);
+
+  const getQuotationDetail = useCallback(async (quotationId) => {
+    const cachedQuote = quoteCacheRef.current[quotationId];
+    if (cachedQuote) {
+      return cachedQuote;
+    }
+
+    const localQuote = quotes.find((quote) => String(quote.id) === String(quotationId)) || getLocalQuoteById(quotationId);
+    if (localQuote) {
+      quoteCacheRef.current[quotationId] = localQuote;
+      return localQuote;
+    }
+
+    if (!isNumericId(quotationId)) {
+      throw new Error("Local quotation not found.");
+    }
+
+    const detail = await fetchQuotation(Number(quotationId));
+    quoteCacheRef.current[quotationId] = detail;
+    return detail;
+  }, [quotes]);
+
+  const workspace = useBomWorkspace({
+    clients,
+    onQuoteSaved: upsertQuote,
+    notify,
+    showPdfModal,
+  });
+
+  const loadInitialData = useCallback(async () => {
+    setBootstrapping(true);
+    const cachedClients = readLocalCollection(localStoreKeys.clients);
+    const cachedProducts = readLocalCollection(localStoreKeys.products);
+    const cachedQuotes = readLocalCollection(localStoreKeys.quotes);
+    setClients(Array.isArray(cachedClients) ? cachedClients : []);
+    setProducts(Array.isArray(cachedProducts) ? cachedProducts : []);
+    setQuotes(sortQuotesByDate(Array.isArray(cachedQuotes) ? cachedQuotes : []));
+    try {
+      const [clientResponse, productResponse, quoteResponse] = await Promise.all([
+        fetchClients(),
+        fetchManagedProducts(),
+        fetchQuotations(),
+      ]);
+
+      const remoteClients = Array.isArray(clientResponse?.results) ? clientResponse.results : [];
+      const remoteProducts = Array.isArray(productResponse?.results) ? productResponse.results : [];
+      const remoteQuotes = Array.isArray(quoteResponse?.results) ? quoteResponse.results : [];
+
+      const mergedClients = mergeById(cachedClients, remoteClients);
+      setClients(mergedClients);
+      setProducts(remoteProducts);
+      const mergedQuotes = mergeById(cachedQuotes, remoteQuotes);
+      setQuotes(sortQuotesByDate(mergedQuotes));
+      
+      remoteClients.forEach((client) => upsertLocalEntry(localStoreKeys.clients, client));
+      remoteProducts.forEach((product) => upsertLocalEntry(localStoreKeys.products, product));
+      remoteQuotes.forEach((quote) => upsertLocalEntry(localStoreKeys.quotes, quote));
+    } catch (error) {
+      notify({
+        tone: "warning",
+        title: "Unable to load the BOM system",
+        message: getErrorMessage(error, "Loaded the latest local cache. Check backend connection and refresh."),
+      });
+    } finally {
+      setBootstrapping(false);
+    }
+  }, [notify]);
+
+  useEffect(() => {
+    void loadInitialData();
+  }, [loadInitialData]);
+
+  const handleCreateQuotation = useCallback(async () => {
+    await workspace.startNewDraft();
+    navigateTo("create-bom");
+  }, [navigateTo, workspace]);
+
+  const handleViewQuotation = useCallback(async (quotationId) => {
+    try {
+      const detail = await getQuotationDetail(quotationId);
+      setSelectedQuote(detail);
+      navigateTo("quotation-view");
+    } catch (error) {
+      notify({
+        tone: "warning",
+        title: "Unable to open quotation",
+        message: getErrorMessage(error, "Please try again."),
+      });
+    }
+  }, [getQuotationDetail, navigateTo, notify]);
+
+  const handleEditQuotation = useCallback(async (quotationId) => {
+    try {
+      const detail = await getQuotationDetail(quotationId);
+      await workspace.loadQuote(detail, "edit");
+      navigateTo("create-bom");
+    } catch (error) {
+      notify({
+        tone: "warning",
+        title: "Unable to load quotation",
+        message: getErrorMessage(error, "Please try again."),
+      });
+    }
+  }, [getQuotationDetail, navigateTo, notify, workspace]);
+
+  const handleDuplicateQuotation = useCallback(async (quotationId) => {
+    try {
+      const detail = await getQuotationDetail(quotationId);
+      await workspace.loadQuote(detail, "duplicate");
+      navigateTo("create-bom");
+    } catch (error) {
+      notify({
+        tone: "warning",
+        title: "Unable to duplicate quotation",
+        message: getErrorMessage(error, "Please try again."),
+      });
+    }
+  }, [getQuotationDetail, navigateTo, notify, workspace]);
+
+  const handleDownloadQuotation = useCallback(async (quotationId) => {
+    try {
+      const detail = await getQuotationDetail(quotationId);
+      if (isNumericId(quotationId)) {
+        try {
+          const pdfBlob = await fetchQuotationPdf(Number(quotationId));
+          downloadBlob(pdfBlob, buildPdfDownloadName(detail));
+          return;
+        } catch (pdfError) {
+          notify({ tone: "neutral", title: "Using local generation", message: "Backend unreachable, generating PDF locally." });
+        }
+      }
+
+      const pdfBlob = await generateQuotationPDF(detail, {
+        gstRate: detail.gst_rate || 18,
+        publicAssetBase: PUBLIC_ASSET_BASE_URL,
+      });
+      downloadBlob(pdfBlob, buildPdfDownloadName(detail));
+    } catch (error) {
+      notify({
+        tone: "warning",
+        title: "Unable to download PDF",
+        message: getErrorMessage(error, "Please try again."),
+      });
+    }
+  }, [getQuotationDetail, notify]);
+
+  const handleViewQuotationPdf = useCallback(async (quotationId) => {
+    try {
+      const detail = await getQuotationDetail(quotationId);
+      const filename = buildPdfDownloadName(detail);
+      
+      showPdfModal(async () => {
+        const currentHash = `${quotationId}-${detail.updated_at || detail.id}`;
+        if (pdfCacheRef.current[currentHash]) {
+          return pdfCacheRef.current[currentHash];
+        }
+
+        let pdfBlob;
+        if (isNumericId(quotationId)) {
+          try {
+            pdfBlob = await fetchQuotationPdf(Number(quotationId));
+          } catch (pdfError) {
+            notify({ tone: "neutral", title: "Using local generation", message: "Backend unreachable, generating PDF locally." });
+          }
+        }
+
+        if (!pdfBlob) {
+          pdfBlob = await generateQuotationPDF(detail, {
+            gstRate: detail.gst_rate || 18,
+            publicAssetBase: PUBLIC_ASSET_BASE_URL,
+          });
+        }
+        
+        pdfCacheRef.current[currentHash] = pdfBlob;
+        return pdfBlob;
+      }, { filename, isDraft: false });
+    } catch (error) {
+      notify({
+        tone: "warning",
+        title: "Unable to open quotation PDF",
+        message: getErrorMessage(error, "Please try again."),
+      });
+    }
+  }, [getQuotationDetail, notify, showPdfModal]);
+
+  const handleDeleteQuotation = useCallback(async (quotationId) => {
+    if (!window.confirm("Delete this quotation permanently?")) {
+      return;
+    }
+
+    try {
+      if (isNumericId(quotationId)) {
+        await deleteQuotation(Number(quotationId));
+      }
+      delete quoteCacheRef.current[quotationId];
+      removeLocalEntry(localStoreKeys.quotes, quotationId);
+      setQuotes((prev) => prev.filter((quote) => quote.id !== quotationId));
+      setSelectedQuote((prev) => (prev?.id === quotationId ? null : prev));
+      notify({
+        tone: "success",
+        title: "Quotation deleted",
+        message: "The quotation was removed successfully.",
+      });
+      if (activePage === "quotation-view") {
+        navigateTo("quotations");
+      }
+    } catch (error) {
+      notify({
+        tone: "warning",
+        title: "Unable to delete quotation",
+        message: getErrorMessage(error, "Please try again."),
+      });
+    }
+  }, [activePage, navigateTo, notify]);
+
+  const handleSaveClient = useCallback(async (form) => {
+    try {
+      const savedClient = form.id
+        ? await updateClient(form.id, form)
+        : await createClient(form);
+
+      setClients((prev) =>
+        [...prev.filter((client) => client.id !== savedClient.id), savedClient].sort((left, right) =>
+          String(left.client_name || "").localeCompare(String(right.client_name || ""))
+        )
+      );
+      upsertLocalEntry(localStoreKeys.clients, savedClient);
+      notify({
+        tone: "success",
+        title: form.id ? "Client updated" : "Client created",
+        message: `${savedClient.client_name} is ready to use in quotations.`,
+      });
+      return savedClient;
+    } catch (error) {
+      notify({
+        tone: "warning",
+        title: "Unable to save client",
+        message: getErrorMessage(error, "Please review the client details and try again."),
+      });
+      return null;
+    }
+  }, [notify]);
+
+  const handleDeleteClient = useCallback(async (clientId) => {
+    if (!window.confirm("Delete this client from the master list?")) {
+      return;
+    }
+
+    try {
+      await deleteClient(clientId);
+      setClients((prev) => prev.filter((client) => client.id !== clientId));
+      removeLocalEntry(localStoreKeys.clients, clientId);
+      notify({
+        tone: "success",
+        title: "Client deleted",
+        message: "The client record was removed successfully.",
+      });
+    } catch (error) {
+      notify({
+        tone: "warning",
+        title: "Unable to delete client",
+        message: getErrorMessage(error, "This client may be linked to saved quotations."),
+      });
+    }
+  }, [notify]);
+
+  const handleSaveProduct = useCallback(async (form) => {
+    try {
+      const savedProduct = form.id
+        ? await updateManagedProduct(form.id, form)
+        : await createManagedProduct(form);
+
+      setProducts((prev) =>
+        [...prev.filter((product) => product.id !== savedProduct.id), savedProduct].sort((left, right) =>
+          String(left.product_code || "").localeCompare(String(right.product_code || ""))
+        )
+      );
+      upsertLocalEntry(localStoreKeys.products, savedProduct);
+      notify({
+        tone: "success",
+        title: form.id ? "Product updated" : "Product created",
+        message: `${savedProduct.product_code} is now available in managed search.`,
+      });
+      return savedProduct;
+    } catch (error) {
+      notify({
+        tone: "warning",
+        title: "Unable to save product",
+        message: getErrorMessage(error, "Check that the product code is unique and try again."),
+      });
+      return null;
+    }
+  }, [notify]);
+
+  const handleDeleteProduct = useCallback(async (productId) => {
+    if (!window.confirm("Delete this managed product?")) {
+      return;
+    }
+
+    try {
+      await deleteManagedProduct(productId);
+      setProducts((prev) => prev.filter((product) => product.id !== productId));
+      removeLocalEntry(localStoreKeys.products, productId);
+      notify({
+        tone: "success",
+        title: "Product deleted",
+        message: "The managed product was removed successfully.",
+      });
+    } catch (error) {
+      notify({
+        tone: "warning",
+        title: "Unable to delete product",
+        message: getErrorMessage(error, "Please try again."),
+      });
+    }
+  }, [notify]);
+
+  let pageContent = null;
+  if (activePage === "quotations") {
+    pageContent = (
+      <BomListPage
+        loading={bootstrapping}
+        quotes={quotes}
+        onCreateQuotation={handleCreateQuotation}
+        onViewQuotation={handleViewQuotation}
+        onEditQuotation={handleEditQuotation}
+        onDeleteQuotation={handleDeleteQuotation}
+        onDuplicateQuotation={handleDuplicateQuotation}
+        onDownloadQuotation={handleDownloadQuotation}
+      />
+    );
+  } else if (activePage === "clients") {
+    pageContent = (
+      <ClientsPage
+        loading={bootstrapping}
+        clients={clients}
+        onSaveClient={handleSaveClient}
+        onDeleteClient={handleDeleteClient}
+      />
+    );
+  } else if (activePage === "products") {
+    pageContent = (
+      <ProductsPage
+        loading={bootstrapping}
+        products={products}
+        onSaveProduct={handleSaveProduct}
+        onDeleteProduct={handleDeleteProduct}
+      />
+    );
+  } else if (activePage === "quotation-view") {
+    pageContent = (
+      <QuotationViewPage
+        quote={selectedQuote}
+        onBack={() => navigateTo("quotations")}
+        onEdit={handleEditQuotation}
+        onDuplicate={handleDuplicateQuotation}
+        onViewPdf={handleViewQuotationPdf}
+        onDownload={handleDownloadQuotation}
+      />
+    );
+  } else {
+    pageContent = (
+      <CreateBomPage
+        workspace={workspace}
+        clients={clients}
+        onOpenList={() => navigateTo("quotations")}
+        onOpenClients={() => navigateTo("clients")}
+        onOpenProducts={() => navigateTo("products")}
+      />
+    );
+  }
 
   return (
-    <main className="app-shell">
-      <section className="workspace-panel shadow-glass">
-        {/* 1. CLIENT INFORMATION FORM (TOP) */}
-        <div className="client-form-section card-box">
-          <h2 className="section-title">👤 Client Information</h2>
-          <div className="form-grid">
-            <div className="field-group">
-              <label>Prepared By</label>
-              <select 
-                value={clientInfo.preparedBy} 
-                onChange={(e) => setClientInfo({...clientInfo, preparedBy: e.target.value})}
-              >
-                <option>Jagdish</option>
-                <option>Tejesh</option>
-                <option>Admin</option>
-              </select>
-            </div>
-            <div className="field-group">
-              <label>Proposal No</label>
-              <input type="text" value={clientInfo.proposalNo} onChange={(e) => setClientInfo({...clientInfo, proposalNo: e.target.value})} />
-            </div>
-            <div className="field-group">
-              <label>Client Name / Business</label>
-              <input type="text" placeholder="Enter name" value={clientInfo.clientName} onChange={(e) => setClientInfo({...clientInfo, clientName: e.target.value})} />
-            </div>
-            <div className="field-group">
-              <label>Phone Number</label>
-              <input type="text" placeholder="+91 ..." value={clientInfo.phone} onChange={(e) => setClientInfo({...clientInfo, phone: e.target.value})} />
-            </div>
-            <div className="field-group">
-              <label>Company</label>
-              <input type="text" placeholder="Company name" value={clientInfo.company} onChange={(e) => setClientInfo({...clientInfo, company: e.target.value})} />
-            </div>
-            <div className="field-group">
-              <label>Email Address</label>
-              <input type="email" placeholder="example@mail.com" value={clientInfo.email} onChange={(e) => setClientInfo({...clientInfo, email: e.target.value})} />
-            </div>
-            <div className="field-group full-width">
-              <label>Project Site / Address</label>
-              <textarea placeholder="Enter address details..." value={clientInfo.address} onChange={(e) => setClientInfo({...clientInfo, address: e.target.value})} />
-            </div>
-            <div className="field-group inline-group">
-              <label className="checkbox-label">
-                <input type="checkbox" checked={clientInfo.gstCompliance} onChange={(e) => setClientInfo({...clientInfo, gstCompliance: e.target.checked})} />
-                Apply GST Compliance
-              </label>
-            </div>
-            {clientInfo.gstCompliance && (
-              <div className="field-group">
-                <label>GST %</label>
-                <input type="number" value={clientInfo.gstPercentage} onChange={(e) => setClientInfo({...clientInfo, gstPercentage: parseFloat(e.target.value) || 0})} />
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="catalog-switcher">
-          {catalogOptions.map((option) => (
-            <button
-              key={option.id}
-              type="button"
-              className={activeCatalog === option.id ? "catalog-chip is-active" : "catalog-chip"}
-              onClick={() => setActiveCatalog(option.id)}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
-
-        <div className="search-section-wrapper" ref={searchRef}>
-          <form className="search-form" onSubmit={runSearch}>
-            <div className="search-input-wrapper">
-              <span className="search-icon">🔍</span>
-              <input
-                type="text"
-                placeholder="Type code (e.g. 2631) or name..."
-                value={query}
-                onChange={(event) => {
-                  setQuery(event.target.value);
-                  // While typing, show lightweight suggestions instead of stale full-result overlay.
-                  setHasSearched(false);
-                }}
-              />
-                          {/* Autocomplete Suggestions Dropdown */}
-                          {showSuggestions && suggestions.length > 0 && (
-                            <div className="suggestions-dropdown">
-                              {suggestions.map((suggestion, index) => (
-                                <button
-                                  key={`${suggestion.code || suggestion.name || "suggestion"}-${index}`}
-                                  type="button"
-                                  className="suggestion-item"
-                                  onClick={() => selectSuggestion(suggestion)}
-                                >
-                                  <img
-                                    src={buildProductImageUrl(suggestion)}
-                                    alt=""
-                                    className="suggestion-thumb"
-                                    loading="lazy"
-                                    decoding="async"
-                                    onError={(event) => handleProductImageError(event, suggestion)}
-                                  />
-                                  <span className="suggestion-meta">
-                                    <span className="suggestion-code">{suggestion.code}</span>
-                                    <span className="suggestion-name">{suggestion.name}</span>
-                                    <span className="suggestion-source">{suggestion.source || activeCatalog}</span>
-                                  </span>
-                                </button>
-                              ))}
-                            </div>
-                          )}
-            </div>
-            <button type="submit" disabled={loading} className="btn-accent">
-              {loading ? "FINDING..." : "+ ADD PRODUCT"}
-            </button>
-          </form>
-
-          {hasSearched && results.length > 0 && (
-            <div className="search-results-overlay">
-              <div className="results-header">
-                <span className="results-header-title uppercase font-black text-[10px] tracking-widest text-[#1e293b]">
-                  MATCHES IN {activeCatalog === "all" ? "ALL CATALOGS" : activeCatalog.toUpperCase()}
-                </span>
-                <button className="results-close-btn" onClick={() => setHasSearched(false)}>×</button>
-              </div>
-              <div className="results-container grouped-results">
-                {groupedResults.map((group) => (
-                  <div key={group.baseCode} className="variant-group-block">
-                    <div className="variant-group-header">
-                      <span className="variant-group-title">{group.baseCode}</span>
-                      <div className="variant-chip-row">
-                        {group.items.map((item) => (
-                          <span key={`${group.baseCode}-${item.code}`} className="variant-chip">{item.variant || "BASE"}</span>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="variant-card-grid">
-                      {group.items.map((product) => (
-                        <div
-                          key={`${product.source}-${product.code}`}
-                          className={product.isCp ? "variant-card cp-card" : "variant-card"}
-                          onClick={() => addToBom(product)}
-                        >
-                          <div className="variant-image-wrap">
-                            <div className={isImageLoaded(product) ? "image-placeholder is-hidden" : "image-placeholder"}>Loading image...</div>
-                            <img
-                              src={buildProductImageUrl(product)}
-                              alt=""
-                              className="clickable-image"
-                              loading="lazy"
-                              decoding="async"
-                              onLoad={() => markImageLoaded(product)}
-                              onClick={(event) => openImagePreview(event, product)}
-                              onError={(event) => handleProductImageError(event, product)}
-                            />
-                            {!product.isCp && product.price > 0 && (
-                              <span className="variant-price-overlay">{currencyFormatter.format(product.price)}</span>
-                            )}
-                            {!product.isCp && product.price <= 0 && (
-                              <span className="variant-price-na">Price Not Available</span>
-                            )}
-                          </div>
-                          <div className="variant-card-meta">
-                            <span className="variant-code-text">{product.code}</span>
-                            <span className="variant-finish-text">{product.color || product.variant || "Standard"}</span>
-                            {product.isCp && product.price > 0 && (
-                              <span className="variant-price-inline">{currencyFormatter.format(product.price)}</span>
-                            )}
-                            {product.isCp && product.price <= 0 && (
-                              <span className="variant-price-inline variant-price-inline-na">Price Not Available</span>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div className="bom-section">
-          <table className="bom-table">
-            <thead>
-              <tr>
-                <th>CODE</th>
-                <th>PRODUCT NAME</th>
-                <th>SIZE</th>
-                <th>COLOR</th>
-                <th>QTY</th>
-                <th>RATE</th>
-                {discountConfig.method === "item-wise" && <th>DISC%</th>}
-                <th>AMOUNT</th>
-                <th>ROOM</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {bom.length === 0 ? (
-                <tr><td colSpan="10" className="empty-bom">No products added. Use search to build your BOM.</td></tr>
-              ) : (
-                bom.map((item) => (
-                  <tr key={item.id}>
-                    <td>{item.code}</td>
-                    <td className="col-product">
-                      <div className="product-info-cell">
-                        <div className="product-thumb-wrap">
-                          <div className={isImageLoaded(item) ? "image-placeholder table-image-placeholder is-hidden" : "image-placeholder table-image-placeholder"}>Loading image...</div>
-                          <img
-                            src={buildProductImageUrl(item)}
-                            alt=""
-                            className="clickable-image"
-                            loading="lazy"
-                            decoding="async"
-                            onLoad={() => markImageLoaded(item)}
-                            onClick={(event) => openImagePreview(event, item)}
-                            onError={(event) => handleProductImageError(event, item)}
-                          />
-                        </div>
-                        <span>{item.name}</span>
-                      </div>
-                    </td>
-                    <td><input className="table-input" value={item.size} onChange={(e) => updateBomItem(item.id, "size", e.target.value)} /></td>
-                    <td><input className="table-input" value={item.color} onChange={(e) => updateBomItem(item.id, "color", e.target.value)} /></td>
-                    <td className="col-small"><input className="table-input" type="number" min="1" value={item.qty} onChange={(e) => updateBomItem(item.id, "qty", parseInt(e.target.value) || 0)} /></td>
-                    <td><input className="table-input" type="number" value={item.rate} onChange={(e) => updateBomItem(item.id, "rate", parseFloat(e.target.value) || 0)} /></td>
-                    {discountConfig.method === "item-wise" && (
-                      <td className="col-small"><input className="table-input" type="number" min="0" max="100" value={item.discount} onChange={(e) => updateBomItem(item.id, "discount", parseFloat(e.target.value) || 0)} /></td>
-                    )}
-                    <td className="col-amount">{currencyFormatter.format(calculateRowAmount(item))}</td>
-                    <td>
-                      <select className="room-select" value={item.room} onChange={(e) => updateBomItem(item.id, "room", e.target.value)}>
-                        <option value="">Select Room</option>
-                        {roomOptions.map((room) => (<option key={room} value={room}>{room}</option>))}
-                      </select>
-                    </td>
-                    <td><button className="delete-btn" onClick={() => removeBomItem(item.id)}>🗑️</button></td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {/* 2. DISCOUNT CONFIGURATION SECTION (BOTTOM) */}
-        <div className="discount-config-section card-box mt-12">
-          <h2 className="section-title">% Discount Configuration</h2>
-          <div className="config-grid">
-            <div className="method-switcher">
-               <label className="label-lite">Discount Method</label>
-               <div className="btn-group">
-                 <button className={discountConfig.method === 'item-wise' ? 'btn-select is-on' : 'btn-select'} onClick={() => setDiscountConfig({...discountConfig, method: 'item-wise'})}>Item Wise</button>
-                 <button className={discountConfig.method === 'common' ? 'btn-select is-on' : 'btn-select'} onClick={() => setDiscountConfig({...discountConfig, method: 'common'})}>Common %</button>
-                 <button className={discountConfig.method === 'on-total' ? 'btn-select is-on' : 'btn-select'} onClick={() => setDiscountConfig({...discountConfig, method: 'on-total'})}>On Total</button>
-               </div>
-            </div>
-
-            {discountConfig.method === 'common' && (
-              <div className="field-group">
-                <label>Bulk Discount %</label>
-                <input type="number" value={discountConfig.bulkDiscount} onChange={(e) => setDiscountConfig({...discountConfig, bulkDiscount: parseFloat(e.target.value) || 0})} />
-              </div>
-            )}
-            {discountConfig.method === 'on-total' && (
-              <div className="field-group">
-                <label>Flat Discount Amount</label>
-                <input type="number" value={discountConfig.flatDiscount} onChange={(e) => setDiscountConfig({...discountConfig, flatDiscount: parseFloat(e.target.value) || 0})} />
-              </div>
-            )}
-
-            <div className="watermark-group">
-              <label className="toggle-label font-bold text-sm text-[#1e293b]">
-                <input type="checkbox" className="toggle-input" checked={discountConfig.watermark} onChange={(e) => setDiscountConfig({...discountConfig, watermark: e.target.checked})} />
-                PDF Branding - Watermark ON/OFF
-              </label>
-            </div>
-          </div>
-
-          <div className="summary-section mt-8">
-             <div className="summary-row">
-               <span>Subtotal:</span>
-               <span>{currencyFormatter.format(subtotal)}</span>
-             </div>
-             {discountConfig.method !== "item-wise" && (
-                <div className="summary-row text-red-500">
-                  <span>Discount:</span>
-                  <span>- {currencyFormatter.format(subtotal - finalBeforeGst)}</span>
-                </div>
-             )}
-              {clientInfo.gstCompliance && (
-                <div className="summary-row text-emerald-600">
-                  <span>GST ({clientInfo.gstPercentage}%):</span>
-                  <span>+ {currencyFormatter.format(totalGst)}</span>
-                </div>
-              )}
-             <div className="summary-row total-highlight">
-               <span>Grand Total:</span>
-               <span>{currencyFormatter.format(grandTotal)}</span>
-             </div>
-          </div>
-        </div>
-
-        <div className="action-buttons mt-12 flex justify-end gap-4 p-6">
-            <button className="btn-pro btn-save" disabled={pdfGenerating}>Save Quote</button>
-            <button className="btn-pro btn-view" onClick={() => generatePdf(true)} disabled={pdfGenerating}>{pdfGenerating ? "GENERATING..." : "View PDF"}</button>
-            <button className="btn-pro btn-generate" onClick={() => generatePdf(false)} disabled={pdfGenerating}>{pdfGenerating ? "GENERATING..." : "Generate PDF"}</button>
-        </div>
-
-        {pdfPreviewUrl && (
-          <div className="pdf-preview-overlay" role="dialog" aria-modal="true">
-            <div className="pdf-preview-modal">
-              <div className="pdf-preview-header">
-                <div className="pdf-preview-title-wrap">
-                  <h3>Quotation Preview</h3>
-                  <p>Review your document before sending</p>
-                </div>
-                <div className="pdf-preview-actions">
-                  <div className="pdf-zoom-controls">
-                    <button type="button" className="pdf-zoom-btn" onClick={() => setPdfZoom((value) => Math.max(60, value - 10))}>-</button>
-                    <span>{pdfZoom}%</span>
-                    <button type="button" className="pdf-zoom-btn" onClick={() => setPdfZoom((value) => Math.min(200, value + 10))}>+</button>
-                    <button type="button" className="pdf-zoom-reset" onClick={() => setPdfZoom(100)}>Reset</button>
-                  </div>
-                  <button className="btn-pro btn-view" onClick={downloadPreviewPdf}>Download PDF</button>
-                  <button className="pdf-close-btn" onClick={closePdfPreview} aria-label="Close preview">×</button>
-                </div>
-              </div>
-              <div className="pdf-frame-wrap">
-                <div className="pdf-frame-canvas">
-                  <iframe
-                    title="Quotation PDF Preview"
-                    src={pdfPreviewUrl}
-                    className="pdf-frame"
-                    style={{
-                      transform: `scale(${pdfZoom / 100})`,
-                      transformOrigin: "top left",
-                      width: `${100 / (pdfZoom / 100)}%`,
-                      height: `${100 / (pdfZoom / 100)}%`,
-                    }}
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {imagePreview.isOpen && (
-          <div className="image-lightbox-overlay" onClick={closeImagePreview} role="dialog" aria-modal="true">
-            <div className="image-lightbox-modal" onClick={(event) => event.stopPropagation()}>
-              <div className="image-lightbox-header">
-                <strong>{imagePreview.title}</strong>
-                <div className="image-lightbox-actions">
-                  <button
-                    type="button"
-                    className="image-lightbox-btn"
-                    onClick={() => setImagePreview((prev) => ({ ...prev, zoom: Math.max(0.5, prev.zoom - 0.1) }))}
-                  >
-                    -
-                  </button>
-                  <span>{Math.round(imagePreview.zoom * 100)}%</span>
-                  <button
-                    type="button"
-                    className="image-lightbox-btn"
-                    onClick={() => setImagePreview((prev) => ({ ...prev, zoom: Math.min(4, prev.zoom + 0.1) }))}
-                  >
-                    +
-                  </button>
-                  <button
-                    type="button"
-                    className="image-lightbox-btn"
-                    onClick={() => setImagePreview((prev) => ({ ...prev, zoom: 1 }))}
-                  >
-                    100%
-                  </button>
-                  <button type="button" className="pdf-close-btn" onClick={closeImagePreview} aria-label="Close image">×</button>
-                </div>
-              </div>
-              <div className="image-lightbox-body">
-                <img
-                  src={imagePreview.src}
-                  alt={imagePreview.title}
-                  style={{ transform: `scale(${imagePreview.zoom})` }}
-                  onError={(event) => {
-                    event.currentTarget.src =
-                      getPublicFallbackImageUrl() ||
-                      buildPlaceholder(imagePreview.title || "Catalog product");
-                  }}
-                />
-              </div>
-            </div>
-          </div>
-        )}
-
-      </section>
-      <footer className="page-footer">© 2026 Pro Quotation Dashboard</footer>
-    </main>
+    <>
+      <AppShell
+        activePage={activePage}
+        onNavigate={navigateTo}
+        notice={notice}
+        onDismissNotice={() => setNotice(null)}
+      >
+        {pageContent}
+      </AppShell>
+      <PdfModal
+        isOpen={pdfModal.isOpen}
+        loading={pdfModal.loading}
+        url={pdfModal.url}
+        error={pdfModal.error}
+        filename={pdfModal.filename}
+        isDraft={pdfModal.isDraft}
+        retryFn={pdfModal.retryFn}
+        onClose={closePdfModal}
+      />
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
+    </>
   );
 }
 

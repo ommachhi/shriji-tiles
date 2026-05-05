@@ -13,6 +13,8 @@ from fastapi import FastAPI, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
+from bom_api import autocomplete_managed_products, router as bom_router, search_managed_product_matches
+from bom_db import create_tables
 from extractor import (
     DEFAULT_CACHE_PATH,
     DEFAULT_IMAGES_DIR,
@@ -267,7 +269,7 @@ MANUALLY_REMOVED_PRODUCT_CODES = {
 def _is_manually_removed_code(code: str) -> bool:
     return normalize_code(code) in MANUALLY_REMOVED_PRODUCT_CODES
 
-app = FastAPI(title="Multi Catalog Product Search API")
+app = FastAPI(title="BOM and Product Catalog API")
 
 logger = logging.getLogger("catalog_api")
 if not logger.handlers:
@@ -326,6 +328,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(bom_router)
 
 
 def _candidate_images_dirs() -> list[Path]:
@@ -435,10 +438,47 @@ def _image_name_from_code(code: str) -> str:
     return f"{safe}.png" if safe else ""
 
 
+def _infer_product_category(product: dict) -> str:
+    text = normalize_text(
+        " ".join(
+            [
+                str(product.get("name", "") or ""),
+                str(product.get("details", "") or ""),
+                str(product.get("color", "") or ""),
+            ]
+        )
+    )
+
+    category_rules = [
+        ("Shower Panels", ("shower panel",)),
+        ("Shower Systems", ("rain shower", "overhead shower", "hand shower", "shower arm", "shower head", "dusch mixer")),
+        ("Deck Mixers", ("deck mounted deusch mixer", "deck mounted basin mixer", "deck mounted mixer", "deck mixer")),
+        ("Basin Mixers", ("basin mixer", "pillar cock", "faucet", "tap")),
+        ("Basins", ("counter basin", "semi counter basin", "wall mounted basin", "basin", "lavatory")),
+        ("Toilets", ("wc", "water closet", "closet", "toilet", "commode", "couple suite")),
+        ("Seat Covers", ("seat cover",)),
+        ("Valves & Diverters", ("diverter", "stop cock", "angle valve", "flush valve", "valve")),
+        ("Waste Couplings", ("waste coupling", "waste", "drain")),
+        ("Kitchen Fixtures", ("sink cock", "kitchen sink", "sink mixer", "kitchen faucet")),
+        ("Mirrors", ("mirror",)),
+        ("Accessories", ("soap", "towel", "hook", "holder", "shelf", "paper holder", "accessory")),
+    ]
+
+    for category, patterns in category_rules:
+        if any(pattern in text for pattern in patterns):
+            return category
+
+    if str(product.get("source", "")).strip().lower() == "kohler":
+        return "Bathware"
+    return "Bath Fittings"
+
+
 def _searchable_product(product: dict) -> dict:
     code_text = str(product.get("code", "")).strip().upper()
+    category = _infer_product_category(product)
     return {
         **product,
+        "category": category,
         "_code_raw": code_text,
         "_code_tokens": [token for token in re.split(r"[+/]", code_text) if token],
         "_code_compact": normalize_code(product.get("code", "")),
@@ -446,6 +486,8 @@ def _searchable_product(product: dict) -> dict:
         "_name_compact": normalize_code(product.get("name", "")),
         "_details_normalized": normalize_text(product.get("details", "")),
         "_details_compact": normalize_code(product.get("details", "")),
+        "_category_normalized": normalize_text(category),
+        "_category_compact": normalize_code(category),
     }
 
 
@@ -1178,6 +1220,7 @@ async def request_timing_middleware(request: Request, call_next):
 def _startup_load_catalogs() -> None:
     global SOURCE_STORE, _CATALOG_SOURCES_SIGNATURE
 
+    create_tables()
     print("[startup] loading catalogs")
     _log_kohler_runtime_paths()
     current_signature = _catalog_sources_signature()
@@ -1451,6 +1494,7 @@ def _get_autocomplete_suggestions(query: str, source_key: str, limit: int = 10) 
         
         code_compact = product["_code_compact"]
         name_normalized = product["_name_normalized"]
+        category_normalized = product.get("_category_normalized", "")
         
         score = 0.0
         
@@ -1466,6 +1510,10 @@ def _get_autocomplete_suggestions(query: str, source_key: str, limit: int = 10) 
                 score = 90.0
             elif query.lower() in name_normalized:
                 score = 70.0
+            elif category_normalized.startswith(query.lower()):
+                score = 68.0
+            elif query.lower() in category_normalized:
+                score = 58.0
         
         if score > 0:
             suggestions.append((score, product))
@@ -1648,6 +1696,8 @@ def _search_matches(query: str, source_key: str, limit: int = 20) -> list[dict]:
         name_compact = product["_name_compact"]
         details_normalized = product["_details_normalized"]
         details_compact = product["_details_compact"]
+        category_normalized = product.get("_category_normalized", "")
+        category_compact = product.get("_category_compact", "")
 
         if compact_query and code_compact.startswith(compact_query):
             score = max(score, 120)
@@ -1667,6 +1717,12 @@ def _search_matches(query: str, source_key: str, limit: int = 20) -> list[dict]:
             score = max(score, 78)
         if compact_query and compact_query in name_compact:
             score = max(score, 70)
+        if normalized_query and category_normalized == normalized_query:
+            score = max(score, 76)
+        if normalized_query and normalized_query in category_normalized:
+            score = max(score, 72)
+        if compact_query and compact_query in category_compact:
+            score = max(score, 69)
 
         if score:
             candidates.append(
@@ -1704,6 +1760,7 @@ def _manual_query_results(query: str, source_key: str) -> list[dict]:
                 "source_label": "Aquant",
                 "code": item["code"],
                 "name": item.get("name") or "Product",
+                "category": _infer_product_category(item),
                 "price": item["price"],
                 "color": item["color"],
                 "size": item.get("size"),
@@ -1759,6 +1816,7 @@ def _image_only_query_results(query: str, source_key: str) -> list[dict]:
                 "source_label": CATALOG_SOURCES[source_key]["label"],
                 "code": code_value,
                 "name": code_value,
+                "category": "Image Reference",
                 "price": 0,
                 "color": None,
                 "size": None,
@@ -1850,6 +1908,7 @@ def _serialize_product(request: Request, product: dict) -> dict:
         "variant": product.get("variant"),
         "isCp": bool(product.get("is_cp")),
         "price": _coerce_price(product.get("price", 0)),
+        "category": product.get("category") or _infer_product_category(product),
         "color": product.get("color"),
         "size": product.get("size"),
         "details": product.get("details"),
@@ -1891,7 +1950,7 @@ def _serialize_product(request: Request, product: dict) -> dict:
 
     override = PRODUCT_OVERRIDES.get(normalize_code(serialized.get("code", "")))
     if override:
-        for field in ("name", "price", "color", "size", "details"):
+        for field in ("name", "price", "category", "color", "size", "details"):
             if field in override:
                 serialized[field] = override[field]
 
@@ -1980,6 +2039,124 @@ def health():
     }
 
 
+@app.get("/catalog/products")
+def list_products(
+    request: Request,
+    q: str = Query(default=""),
+    brand: str = Query(default="all"),
+    category: str = Query(default="all"),
+    limit: int = Query(default=24, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    sort: str = Query(default="code"),
+):
+    _ensure_catalogs_loaded()
+
+    selected_brand = brand.strip().lower()
+    if selected_brand not in {"all", *CATALOG_SOURCES.keys()}:
+        selected_brand = "all"
+
+    selected_category = normalize_text(category) if category and category.lower() != "all" else ""
+    effective_query = (q or "").strip()
+    normalized_query = normalize_text(effective_query)
+    compact_query = normalize_code(effective_query)
+
+    base_pool: list[dict] = []
+    available_categories = set()
+    seen_keys = set()
+
+    for source_key, store in SOURCE_STORE.items():
+        if selected_brand != "all" and source_key != selected_brand:
+            continue
+
+        for product in store.get("catalog", []):
+            serialized = _serialize_product(request, product)
+            if _is_manually_removed_code(serialized.get("code", "")):
+                continue
+
+            product_category = str(serialized.get("category") or _infer_product_category(product)).strip() or "Uncategorized"
+            serialized["category"] = product_category
+            available_categories.add(product_category)
+
+            unique_key = (
+                source_key,
+                normalize_code(serialized.get("code", "")),
+                normalize_text(serialized.get("name", "")),
+            )
+            if unique_key in seen_keys:
+                continue
+            seen_keys.add(unique_key)
+            base_pool.append(serialized)
+
+    filtered: list[tuple[int, dict]] = []
+    for item in base_pool:
+        item_category = normalize_text(item.get("category", ""))
+        if selected_category and item_category != selected_category:
+            continue
+
+        if not effective_query:
+            filtered.append((0, item))
+            continue
+
+        code_compact = normalize_code(item.get("code", ""))
+        name_normalized = normalize_text(item.get("name", ""))
+        details_normalized = normalize_text(item.get("details", ""))
+        brand_normalized = normalize_text(item.get("sourceLabel", ""))
+        category_normalized = normalize_text(item.get("category", ""))
+
+        score = 0
+        if compact_query and code_compact == compact_query:
+            score = max(score, 220)
+        if compact_query and code_compact.startswith(compact_query):
+            score = max(score, 190)
+        if compact_query and compact_query in code_compact:
+            score = max(score, 160)
+        if normalized_query and name_normalized == normalized_query:
+            score = max(score, 170)
+        if normalized_query and name_normalized.startswith(normalized_query):
+            score = max(score, 150)
+        if normalized_query and normalized_query in name_normalized:
+            score = max(score, 130)
+        if normalized_query and normalized_query in category_normalized:
+            score = max(score, 125)
+        if normalized_query and normalized_query in details_normalized:
+            score = max(score, 110)
+        if normalized_query and normalized_query in brand_normalized:
+            score = max(score, 90)
+
+        if score > 0:
+            filtered.append((score, item))
+
+    if sort == "price_desc":
+        filtered.sort(key=lambda pair: (-pair[1].get("price", 0), pair[1].get("name", ""), pair[1].get("code", "")))
+    elif sort == "price_asc":
+        filtered.sort(key=lambda pair: (pair[1].get("price", 0), pair[1].get("name", ""), pair[1].get("code", "")))
+    elif sort == "name":
+        filtered.sort(key=lambda pair: (-pair[0], normalize_text(pair[1].get("name", "")), pair[1].get("code", "")))
+    else:
+        filtered.sort(key=lambda pair: (-pair[0], normalize_code(pair[1].get("code", "")), normalize_text(pair[1].get("name", ""))))
+
+    total = len(filtered)
+    page = [item for _, item in filtered[offset : offset + limit]]
+
+    return {
+        "results": page,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "sort": sort,
+        "brand": selected_brand,
+        "category": category if selected_category else "all",
+        "availableBrands": [
+            {"id": "all", "label": "All Brands"},
+            *[
+                {"id": source_key, "label": source_config["label"]}
+                for source_key, source_config in CATALOG_SOURCES.items()
+            ],
+        ],
+        "availableCategories": sorted(available_categories),
+    }
+
+
 @app.get("/search")
 def search(
     request: Request,
@@ -1992,13 +2169,16 @@ def search(
     effective_query = (q or query or "").strip()
 
     selected_catalog = catalog.strip().lower()
-    if selected_catalog not in {"all", *CATALOG_SOURCES.keys()}:
+    if selected_catalog not in {"all", "managed", *CATALOG_SOURCES.keys()}:
         selected_catalog = "all"
 
     compact_query = normalize_code(effective_query)
     kohler_like_query = bool(compact_query and (compact_query.startswith("k") or compact_query.startswith("ex")))
+    result_limit = 20 if len(compact_query) < 4 else 50
 
-    if selected_catalog == "all":
+    if selected_catalog == "managed":
+        source_keys = []
+    elif selected_catalog == "all":
         # For Kohler-like code searches, prefer Kohler catalog only to avoid
         # cross-catalog duplicates with wrong image/price cards.
         source_keys = ["kohler"] if kohler_like_query and compact_query else list(CATALOG_SOURCES.keys())
@@ -2007,6 +2187,18 @@ def search(
 
     matches = []
     seen_keys = set()
+    if selected_catalog in {"all", "managed"}:
+        for match in search_managed_product_matches(effective_query, catalog=selected_catalog, limit=result_limit):
+            unique_key = (
+                "managed",
+                normalize_code(match.get("code", "")),
+                normalize_text(match.get("name", "")),
+            )
+            if unique_key in seen_keys:
+                continue
+            seen_keys.add(unique_key)
+            matches.append(match)
+
     for source_key in source_keys:
         source_matches = (
             _manual_query_results(effective_query, source_key)
@@ -2037,6 +2229,7 @@ def search(
                     "name": "Wooden Seat Cover",
                     "code": "WSC",
                     "price": 17500,
+                    "category": "Seat Covers",
                     "color": "Walnut Colour",
                     "size": "-",
                     "details": "WalnutColour MRP: Rs. 17,500/-",
@@ -2045,8 +2238,6 @@ def search(
             )
             seen_keys.add(synthetic_key)
 
-    compact = normalize_code(effective_query)
-    result_limit = 20 if len(compact) < 4 else 50
     response = {
         "results": matches[:result_limit],
     }
@@ -2074,19 +2265,31 @@ def autocomplete(
     effective_query = (q or query or "").strip()
 
     selected_catalog = catalog.strip().lower()
-    if selected_catalog not in {"all", *CATALOG_SOURCES.keys()}:
+    if selected_catalog not in {"all", "managed", *CATALOG_SOURCES.keys()}:
         selected_catalog = "all"
     
     compact_query = normalize_code(effective_query)
     kohler_like_query = bool(compact_query and (compact_query.startswith("k") or compact_query.startswith("ex")))
 
-    if selected_catalog == "all":
+    if selected_catalog == "managed":
+        source_keys = []
+    elif selected_catalog == "all":
         source_keys = ["kohler"] if kohler_like_query and compact_query else list(CATALOG_SOURCES.keys())
     else:
         source_keys = [selected_catalog]
     
     suggestions = []
     seen_codes = set()
+
+    if selected_catalog in {"all", "managed"}:
+        for suggestion in autocomplete_managed_products(effective_query, catalog=selected_catalog, limit=limit):
+            code_key = normalize_code(suggestion.get("code", ""))
+            if code_key in seen_codes:
+                continue
+            suggestions.append(suggestion)
+            seen_codes.add(code_key)
+            if len(suggestions) >= limit:
+                break
     
     for source_key in source_keys:
         source_suggestions = _get_autocomplete_suggestions(effective_query, source_key, limit)
@@ -2104,6 +2307,13 @@ def autocomplete(
                     "code": suggestion.get("code", ""),
                     "name": suggestion.get("name", ""),
                     "source": suggestion.get("source", ""),
+                    "sourceLabel": serialized.get("sourceLabel", suggestion.get("source", "")),
+                    "variant": serialized.get("variant"),
+                    "price": _coerce_price(serialized.get("price", suggestion.get("price", 0))),
+                    "category": serialized.get("category", suggestion.get("category", "")),
+                    "color": serialized.get("color"),
+                    "size": serialized.get("size"),
+                    "details": serialized.get("details"),
                     "image": image_value,
                     "hasImage": bool(serialized.get("hasImage")),
                 })

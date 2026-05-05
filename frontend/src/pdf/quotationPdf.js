@@ -1,5 +1,6 @@
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
+import { calculateQuoteTotals, calculateLineTotal } from "../lib/quoteUtils";
 import aquantLogoUrl from "./assets/aquant-logo.png";
 import arialBoldUrl from "./assets/arialbd.ttf";
 import arialRegularUrl from "./assets/arial.ttf";
@@ -9,7 +10,7 @@ import shreejiLogoUrl from "./assets/shreeji_logo.png";
 import shreejiWatermarkUrl from "./assets/shreeji-watermark.png";
 
 const GST_RATE = 18;
-const RUPEE = "\u20B9";
+const RUPEE = "Rs.";
 const CUSTOM_FONT = "ShreejiArial";
 const DEFAULT_PUBLIC_ASSET_BASE = "https://shriji-tiles.onrender.com";
 const PDF_FALLBACK_IMAGE_PATH = "/assets/fallback-product.svg";
@@ -48,15 +49,8 @@ const TABLE = {
 const WATERMARK = {
   width: 148,
   height: 88.8,
-  opacity: 0.03,
+  opacity: 0.1,
 };
-
-const currencyFormatter = new Intl.NumberFormat("en-IN", {
-  style: "currency",
-  currency: "INR",
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-});
 
 const wholeNumberFormatter = new Intl.NumberFormat("en-IN", {
   maximumFractionDigits: 0,
@@ -87,7 +81,11 @@ function coerceNumber(value) {
 }
 
 function formatCurrency(value) {
-  return `${RUPEE} ${currencyFormatter.format(coerceNumber(value))}`;
+  const numeric = Number(coerceNumber(value) || 0);
+  return `${RUPEE} ${numeric.toLocaleString("en-IN", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
 }
 
 function formatWholeCurrency(value) {
@@ -138,7 +136,28 @@ function slugFilePart(value) {
 }
 
 function getClientInfo(payload) {
-  return payload.clientInfo || payload.client_info || payload.client || {};
+  // First check for nested objects
+  if (payload.clientInfo) return payload.clientInfo;
+  if (payload.client_info) return payload.client_info;
+  if (payload.client) return payload.client;
+  
+  // Fallback: construct from flat payload structure
+  return {
+    clientName: payload.client_name || payload.clientName || "",
+    name: payload.client_name || payload.clientName || "",
+    phone: payload.phone || payload.clientPhone || "",
+    mobile: payload.phone || payload.clientPhone || "",
+    mobileNo: payload.phone || payload.clientPhone || "",
+    company: payload.company || payload.clientCompany || "",
+    companyName: payload.company || payload.clientCompany || "",
+    address: payload.address || payload.clientAddress || "",
+    siteAddress: payload.address || payload.clientAddress || "",
+    email: payload.email || payload.clientEmail || "",
+    preparedBy: payload.prepared_by || payload.preparedBy || "",
+    preparedPhone: payload.prepared_phone || payload.preparedPhone || "",
+    preparedMobile: payload.prepared_phone || payload.preparedPhone || "",
+    proposalNo: payload.proposal_no || payload.proposalNo || payload.proposalNumber || "",
+  };
 }
 
 function buildFileName(value, clientName = "") {
@@ -151,7 +170,7 @@ function normalizeRoomList(roomValue) {
   const seen = new Set();
   const rooms = [];
 
-  rawRooms
+  (Array.isArray(rawRooms) ? rawRooms : [])
     .flatMap((value) => String(value || "").split(/[|,]/g))
     .map((value) => value.trim())
     .filter(Boolean)
@@ -166,37 +185,40 @@ function normalizeRoomList(roomValue) {
   return rooms.length ? rooms : ["Unassigned Room"];
 }
 
-function normalizeProduct(item, index) {
+function normalizeProduct(item, index, discountOptions = {}) {
   const qty = Math.max(0, coerceNumber(item.qty ?? item.quantity ?? 0));
   const rate = Math.max(0, coerceNumber(item.rate ?? item.price ?? 0));
-  const discount = Math.min(100, Math.max(0, coerceNumber(item.discount ?? item.discountPercent ?? 0)));
-  const calculatedAmount = qty * rate * (1 - discount / 100);
+  const discount = Math.min(100, Math.max(0, coerceNumber(item.discount ?? item.discountPercent ?? item.discount_percent ?? 0)));
+  const calculatedAmount = calculateLineTotal({ qty, price: rate, discountPercent: discount }, discountOptions);
   const hasAmount = item.amount !== undefined && item.amount !== null && item.amount !== "";
   const amount = hasAmount ? coerceNumber(item.amount) : calculatedAmount;
 
   return {
-    id: String(item.id ?? `${item.sku || item.code || "item"}-${index}`),
-    name: String(item.name ?? item.itemName ?? item.productName ?? "Product").trim(),
+    id: String(item.id ?? `${item.sku || item.product_code || item.code || "item"}-${index}`),
+    name: String(item.name ?? item.itemName ?? item.productName ?? item.product_name ?? "Product").trim(),
     details: String(item.details ?? item.description ?? item.productDetails ?? "").trim(),
     color: String(item.color ?? item.finish ?? "").trim(),
     source: String(item.source ?? item.brand ?? item.catalog ?? "").trim(),
-    sku: String(item.sku ?? item.code ?? item.itemCode ?? "-").trim() || "-",
+    sku: String(item.sku ?? item.code ?? item.itemCode ?? item.product_code ?? "-").trim() || "-",
     size: String(item.size ?? item.dimension ?? "-").trim() || "-",
     qty,
     rate,
     discount,
     amount: Math.max(0, amount),
-    image: String(item.image ?? item.imageUrl ?? item.photo ?? item.thumbnail ?? "").trim(),
+    image: String(item.image ?? item.product_image ?? item.imageUrl ?? item.photo ?? item.thumbnail ?? "").trim(),
     mrp: coerceNumber(item.mrp ?? item.rate ?? item.price ?? rate),
-    rooms: normalizeRoomList(item.room ?? item.rooms ?? item.area),
+    rooms: normalizeRoomList(item.room_name ?? item.room ?? item.rooms ?? item.area),
   };
 }
 
 function groupByRoom(products) {
   const grouped = new Map();
+  const safeProducts = Array.isArray(products) ? products : [];
 
-  products.forEach((item) => {
-    item.rooms.forEach((room) => {
+  safeProducts.forEach((item) => {
+    if (!item) return;
+    const rooms = Array.isArray(item.rooms) ? item.rooms : [];
+    rooms.forEach((room) => {
       if (!grouped.has(room)) {
         grouped.set(room, []);
       }
@@ -306,7 +328,11 @@ function normalizeImageSource(src, publicAssetBase) {
     }
 
     const baseHost = new URL(base).hostname;
-    if (isLocalHost(absolute.hostname) && !isLocalHost(baseHost)) {
+    if (isLocalHost(absolute.hostname) && isLocalHost(baseHost)) {
+      absolute.hostname = baseHost;
+      absolute.port = new URL(base).port;
+      absolute.protocol = new URL(base).protocol;
+    } else if (isLocalHost(absolute.hostname) && !isLocalHost(baseHost)) {
       return `${base}${absolute.pathname}${absolute.search}${absolute.hash}`;
     }
 
@@ -385,7 +411,9 @@ function loadImageElement(src) {
     const image = new Image();
     image.onload = () => resolve(image);
     image.onerror = () => reject(new Error("Image failed to load"));
-    image.crossOrigin = "anonymous";
+    if (!src.startsWith("data:")) {
+      image.crossOrigin = "anonymous";
+    }
     image.src = src;
   });
 }
@@ -568,9 +596,14 @@ async function attachProductImages(products, options = {}) {
   const cache = new Map();
   const validation = [];
   const publicAssetBase = normalizePublicAssetBase(options.publicAssetBase);
+  const safeProducts = Array.isArray(products) ? products : [];
 
   const attached = await Promise.all(
-    products.map(async (product) => {
+    safeProducts.map(async (product) => {
+      if (!product) {
+        return null;
+      }
+      
       const normalizedImage = normalizeImageSource(product.image, publicAssetBase);
       const directImage = String(product.image || "").trim();
       const sourceCandidates = uniqueNonEmpty([
@@ -613,14 +646,14 @@ async function attachProductImages(products, options = {}) {
   );
 
   return {
-    products: attached,
+    products: attached.filter(p => p !== null),
     validation,
   };
 }
 
 function summarizeImageValidation(rows) {
   const list = Array.isArray(rows) ? rows : [];
-  const failures = list.filter((row) => !row.isPublicAbsoluteUrl || !row.accessible || row.usedFallback);
+  const failures = (Array.isArray(list) ? list : []).filter((row) => row && (!row.isPublicAbsoluteUrl || !row.accessible || row.usedFallback));
 
   return {
     ok: failures.length === 0,
@@ -734,7 +767,9 @@ function buildItemDetailLines(item) {
 
 function drawReferenceHeader(doc, payload, assets, fontFamily) {
   const clientInfo = getClientInfo(payload);
-  const proposalNo = String(payload.proposalNo || payload.proposalNumber || clientInfo.proposalNo || "-");
+  const proposalNo = String(
+    payload.proposalNo || payload.proposal_no || payload.proposalNumber || clientInfo.proposalNo || clientInfo.proposal_no || "-"
+  );
   const preparedBy = String(payload.preparedBy || clientInfo.preparedBy || "-");
   const preparedPhone = String(payload.preparedPhone || clientInfo.preparedPhone || clientInfo.preparedMobile || "");
   const preparedText = preparedPhone ? `${preparedBy} - ${preparedPhone}` : preparedBy;
@@ -795,6 +830,11 @@ function drawReferenceHeader(doc, payload, assets, fontFamily) {
   doc.text(`Date: ${proposalDate}`, 195.84, 44.9, { align: "right" });
   doc.text(`Prepared By: ${preparedText}`, 195.84, 48.8, { align: "right" });
 
+  doc.setFontSize(7.5);
+  setTextColor(doc, COLORS.muted);
+  doc.text(`Status: ${(payload.status || "Preview").toUpperCase()}`, 195.84, 52.7, { align: "right" });
+  doc.text(`Generated: ${new Date().toLocaleString("en-GB")}`, 195.84, 56.6, { align: "right" });
+
   setTextColor(doc, COLORS.ink);
   setPdfFont(doc, fontFamily, "bold");
   doc.setFontSize(10);
@@ -838,12 +878,15 @@ function drawWatermark(doc, imageAsset) {
     }
   }
 
+  const pageCount = doc.internal.getNumberOfPages();
+  const isLastPage = doc.internal.getCurrentPageInfo?.().pageNumber === pageCount;
+  const opacity = isLastPage ? 0.2 : WATERMARK.opacity;
   const x = (PAGE.width - drawWidth) / 2;
-  const y = (PAGE.height - drawHeight) / 2;
+  const y = isLastPage ? (PAGE.height - drawHeight) * 0.62 : (PAGE.height - drawHeight) / 2;
 
   try {
     if (typeof doc.setGState === "function" && typeof doc.GState === "function") {
-      doc.setGState(new doc.GState({ opacity: WATERMARK.opacity }));
+      doc.setGState(new doc.GState({ opacity }));
     }
 
     addImageSafely(doc, imageAsset, x, y, drawWidth, drawHeight);
@@ -1074,6 +1117,7 @@ function drawSummaryTable(doc, y, roomTotals, totals, fontFamily) {
   const rows = [
     ...Array.from(roomTotals.entries()).map(([room, total]) => [String(room).toUpperCase(), formatCurrency(total)]),
     [`GST (${formatPercent(totals.gstRate)})`, formatCurrency(totals.gst)],
+    ["FINAL AMOUNT", formatCurrency(totals.grand)],
   ];
 
   setFillColor(doc, COLORS.navy);
@@ -1091,9 +1135,10 @@ function drawSummaryTable(doc, y, roomTotals, totals, fontFamily) {
 
   rows.forEach(([label, amount], index) => {
     const top = y + headerH + index * rowH;
+    const isFinalRow = label === "FINAL AMOUNT";
     doc.line(x, top, x + width, top);
     setTextColor(doc, COLORS.navy);
-    setPdfFont(doc, fontFamily, "normal");
+    setPdfFont(doc, fontFamily, isFinalRow ? "bold" : "normal");
     doc.setFontSize(10.5);
     doc.text(label, x + 72.8, top + 6.6, { align: "center" });
     setPdfFont(doc, fontFamily, "bold");
@@ -1103,10 +1148,8 @@ function drawSummaryTable(doc, y, roomTotals, totals, fontFamily) {
   return y + headerH + rows.length * rowH + 4;
 }
 
-function drawSummaryAndTotals(doc, y, roomTotals, gstRate, fontFamily) {
-  const subtotal = Array.from(roomTotals.values()).reduce((sum, total) => sum + coerceNumber(total), 0);
-  const gst = subtotal * (gstRate / 100);
-  const grand = subtotal + gst;
+function drawSummaryAndTotals(doc, y, roomTotals, globalTotals, fontFamily) {
+  const { subtotal, gstAmount: gst, grandTotal: grand, gstRate } = globalTotals;
   const totals = { subtotal, gst, grand, gstRate };
 
   // Keep summary + subtotal/gst/final-amount together as one non-breaking block.
@@ -1169,7 +1212,10 @@ function addFooters(doc, fontFamily) {
     setPdfFont(doc, fontFamily, "normal");
     doc.setFontSize(7);
     setTextColor(doc, COLORS.muted);
-    doc.text(`Shreeji Ceramica Page ${pageNumber} of ${pageCount}`, PAGE.width / 2, PAGE.footerY, {
+    setDrawColor(doc, COLORS.grid);
+    doc.setLineWidth(0.18);
+    doc.line(12, PAGE.footerY - 2.8, PAGE.width - 12, PAGE.footerY - 2.8);
+    doc.text(`Shreeji Ceramica    Page ${pageNumber} of ${pageCount}`, PAGE.width / 2, PAGE.footerY, {
       align: "center",
     });
   }
@@ -1218,6 +1264,8 @@ async function loadReferenceAssets(options) {
 export async function generateQuotationPDF(data, options = {}) {
   const input = Array.isArray(data) ? { products: data } : data || {};
   const clientInfo = getClientInfo(input);
+  
+  // Safely ensure rawProducts is always an array
   const rawProducts = Array.isArray(input.products)
     ? input.products
     : Array.isArray(input.bom)
@@ -1225,6 +1273,9 @@ export async function generateQuotationPDF(data, options = {}) {
       : Array.isArray(input.items)
         ? input.items
         : [];
+  
+  // Filter out any null/undefined items
+  const safeProducts = (Array.isArray(rawProducts) ? rawProducts : []).filter(p => p);
 
   const mergedOptions = {
     preview: Boolean(options.preview),
@@ -1253,12 +1304,21 @@ export async function generateQuotationPDF(data, options = {}) {
     creator: "Shreeji Ceramica Quotation System",
   });
 
+  const discountOptions = {
+    discountType: input.discount_type || input.discountType || "item-wise",
+    discountValue: coerceNumber(input.discount_value || input.discountValue || 0)
+  };
+
   const assets = await loadReferenceAssets(mergedOptions);
-  const imageResult = await attachProductImages(rawProducts.map(normalizeProduct), {
+  
+  // Map safe products and ensure normalization
+  const normalizedProducts = safeProducts.map((p, i) => normalizeProduct(p, i, discountOptions));
+  
+  const imageResult = await attachProductImages(normalizedProducts, {
     publicAssetBase: mergedOptions.publicAssetBase,
   });
-  const products = imageResult.products;
-  const imageValidation = summarizeImageValidation(imageResult.validation);
+  const products = Array.isArray(imageResult.products) ? imageResult.products : [];
+  const imageValidation = summarizeImageValidation(imageResult.validation || []);
 
   if (mergedOptions.onImageValidation) {
     mergedOptions.onImageValidation(imageValidation);
@@ -1267,11 +1327,26 @@ export async function generateQuotationPDF(data, options = {}) {
   if (!imageValidation.ok && typeof console !== "undefined" && typeof console.warn === "function") {
     console.warn("Some SKU images could not be embedded in PDF.", imageValidation.failures);
   }
+  
   const grouped = groupByRoom(products);
 
   let y = drawReferenceHeader(doc, input, assets, fontFamily);
   const roomResult = drawRoomTables(doc, grouped, y, fontFamily);
-  drawSummaryAndTotals(doc, roomResult.y, roomResult.roomTotals, mergedOptions.gstRate, fontFamily);
+
+  // Ensure items array is safe for mapping
+  const calculateTotalItems = (Array.isArray(rawProducts) ? rawProducts : []).map(p => ({
+    qty: coerceNumber(p.qty ?? p.quantity ?? 0),
+    price: coerceNumber(p.price ?? p.rate ?? 0),
+    discountPercent: coerceNumber(p.discount_percent ?? p.discountPercent ?? p.discount ?? 0)
+  }));
+
+  const globalTotals = calculateQuoteTotals({
+    items: calculateTotalItems,
+    gstRate: mergedOptions.gstRate,
+    ...discountOptions
+  });
+
+  drawSummaryAndTotals(doc, roomResult.y, roomResult.roomTotals, globalTotals, fontFamily);
   drawTermsAndSignatoryPage(doc, fontFamily);
   addWatermarks(doc, assets.watermark);
   addFooters(doc, fontFamily);
@@ -1291,6 +1366,11 @@ export async function generateQuotationPDF(data, options = {}) {
   }
 
   return blob;
+}
+
+export async function generateProposalPdfBlob(proposalData) {
+  // Reuse the robust generator above; keep API simple for callers that only need the blob.
+  return await generateQuotationPDF(proposalData || {}, { download: false });
 }
 
 export { buildFileName as buildProposalFileName, formatCurrency };
