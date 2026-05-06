@@ -87,10 +87,11 @@ export function calculateQuoteTotals({
   const safeDiscountValue = sanitizeNumber(discountValue, 0);
   const grossSubtotal = normalizedItems.reduce((sum, item) => sum + calculateItemBaseTotal(item), 0);
 
+  // Subtotal should always represent the original sum of item prices (gross total)
   let discountAmount = 0;
-  let subtotal = grossSubtotal;
-  let taxableSubtotal = grossSubtotal;
+  const subtotal = grossSubtotal;
 
+  // Calculate discount amount based on discount mode
   if (normalizedDiscountType === "item-wise" || normalizedDiscountType === "common-percentage") {
     discountAmount = normalizedItems.reduce(
       (sum, item) =>
@@ -101,21 +102,16 @@ export function calculateQuoteTotals({
         }),
       0
     );
-    subtotal = Math.max(0, grossSubtotal - discountAmount);
-    taxableSubtotal = subtotal;
+  } else if (normalizedDiscountType === "on-total") {
+    // 'on-total' is a flat amount; cap it at grossSubtotal to avoid negative taxable amounts.
+    discountAmount = Math.max(0, Math.min(safeDiscountValue, grossSubtotal));
   }
+
+  // Taxable subtotal = original prices minus discounts (user requested this behavior)
+  const taxableSubtotal = Math.max(0, grossSubtotal - discountAmount);
   const gstAmount = (taxableSubtotal * safeGstRate) / 100;
 
-  if (normalizedDiscountType === "on-total") {
-    subtotal = grossSubtotal;
-    taxableSubtotal = grossSubtotal;
-    discountAmount = Math.min(safeDiscountValue, taxableSubtotal + gstAmount);
-  }
-
-  const grandTotal =
-    normalizedDiscountType === "on-total"
-      ? Math.max(0, taxableSubtotal + gstAmount - discountAmount)
-      : taxableSubtotal + gstAmount;
+  const grandTotal = Math.max(0, taxableSubtotal + gstAmount);
 
   return {
     subtotal,
@@ -124,6 +120,7 @@ export function calculateQuoteTotals({
     taxableSubtotal,
     gstAmount,
     grandTotal,
+    gstRate: safeGstRate,
   };
 }
 

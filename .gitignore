@@ -1,10 +1,19 @@
 # OS / editor
 .DS_Store
 Thumbs.db
+Desktop.ini
 .vscode/
 .idea/
 
-# Python
+# Environment files
+.env
+.env.*
+**/.env
+**/.env.*
+!frontend/.env.production.example
+!backend/.env.example
+
+# Python / backend
 **/__pycache__/
 **/*.py[cod]
 **/.pytest_cache/
@@ -12,24 +21,12 @@ Thumbs.db
 **/.ruff_cache/
 **/.venv/
 **/venv/
-**/.env
-**/.env.*
-!frontend/.env.production.example
-
-# Node
-**/node_modules/
-**/npm-debug.log*
-**/yarn-debug.log*
-**/yarn-error.log*
-
-# Build artifacts
+**/*.db
+**/*.sqlite
+**/*.sqlite3
 backend/build/
 backend/dist/
 backend/programfiles_backup/
-desktop/release/
-frontend/build/
-
-# Runtime/generated files
 backend/*.log
 backend/*.out
 backend/*.err
@@ -40,17 +37,25 @@ backend/inspect_output.txt
 backend/images_out.txt
 backend/images_output.txt
 backend/page58_render.png
-
-# Large generated catalog assets (regenerate locally)
 backend/*.xlsx
 backend/catalog_cache.json
 backend/kohler_cache.json
 backend/kohler_test_cache.json
 !backend/kohler_cache.json
 !backend/kohler_catalog_full.xlsx
-
-# Archives/binaries
 backend/*.rar
+
+# Node / frontend
+**/node_modules/
+**/npm-debug.log*
+**/yarn-debug.log*
+**/yarn-error.log*
+frontend/build/
+frontend/dist/
+frontend/*.log
+
+# Desktop / packaged output
+desktop/release/
 **/*.zip
 **/*.exe
 **/*.msi

@@ -47,14 +47,10 @@ const TABLE = {
 };
 
 const WATERMARK = {
-  width: 148,
-  height: 88.8,
-  opacity: 0.1,
+  width: 178,
+  height: 107,
+  opacity: 0.18,
 };
-
-const wholeNumberFormatter = new Intl.NumberFormat("en-IN", {
-  maximumFractionDigits: 0,
-});
 
 function setTextColor(doc, color) {
   doc.setTextColor(color[0], color[1], color[2]);
@@ -83,13 +79,9 @@ function coerceNumber(value) {
 function formatCurrency(value) {
   const numeric = Number(coerceNumber(value) || 0);
   return `${RUPEE} ${numeric.toLocaleString("en-IN", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
   })}`;
-}
-
-function formatWholeCurrency(value) {
-  return `${RUPEE} ${wholeNumberFormatter.format(coerceNumber(value))}/-`;
 }
 
 function formatPercent(value) {
@@ -568,17 +560,16 @@ async function softenWatermarkAsset(imageAsset) {
     const { canvas, ctx } = surface;
     ctx.clearRect(0, 0, width, height);
     
-    // Aggressive softening to match reference PDF: very pale, barely visible.
-    ctx.filter = "blur(2px) saturate(10%) brightness(240%) contrast(60%)";
+    // Keep the watermark visible but softened so it reads like a page background.
+    ctx.filter = "blur(0.6px) saturate(70%) brightness(118%) contrast(96%)";
     ctx.drawImage(image, 0, 0, width, height);
     ctx.filter = "none";
 
-    // Tint to very pale tones: white wash + pale yellow overlay.
-    // This converts any color (grey, yellow, etc) to near-white pale tones.
+    // Light tint so it stays visible without dominating the page.
     ctx.globalCompositeOperation = "source-atop";
-    ctx.fillStyle = "rgba(255,255,255,0.75)";  // Heavy white tint
+    ctx.fillStyle = "rgba(255,255,255,0.18)";
     ctx.fillRect(0, 0, width, height);
-    ctx.fillStyle = "rgba(245,240,220,0.25)";  // Subtle pale cream
+    ctx.fillStyle = "rgba(245,240,220,0.08)";
     ctx.fillRect(0, 0, width, height);
     ctx.globalCompositeOperation = "source-over";
 
@@ -755,9 +746,6 @@ function buildItemDetailLines(item) {
   if (item.size && item.size !== "-") {
     lines.push(`Size : ${item.size}`);
   }
-  if (item.mrp > 0) {
-    lines.push(`MRP : ${formatWholeCurrency(item.mrp)}`);
-  }
   if (item.color && item.color !== "-") {
     lines.push(item.color);
   }
@@ -880,7 +868,7 @@ function drawWatermark(doc, imageAsset) {
 
   const pageCount = doc.internal.getNumberOfPages();
   const isLastPage = doc.internal.getCurrentPageInfo?.().pageNumber === pageCount;
-  const opacity = isLastPage ? 0.2 : WATERMARK.opacity;
+  const opacity = isLastPage ? 0.28 : WATERMARK.opacity;
   const x = (PAGE.width - drawWidth) / 2;
   const y = isLastPage ? (PAGE.height - drawHeight) * 0.62 : (PAGE.height - drawHeight) / 2;
 
@@ -1080,21 +1068,23 @@ function drawTotalsBox(doc, y, totals, fontFamily) {
   const splitX = 154.97;
   const width = 91.72;
   const rowH = 8.47;
-  const height = rowH * 3;
+  const height = rowH * 5;
+  const rows = [
+    ["Subtotal", formatCurrency(totals.subtotal)],
+    ["Discount", formatCurrency(totals.discountAmount)],
+    ["Net taxable", formatCurrency(totals.taxableSubtotal)],
+    [`GST (${formatPercent(totals.gstRate)})`, formatCurrency(totals.gst)],
+    ["Final Amount", formatCurrency(totals.grand)],
+  ];
 
   setDrawColor(doc, COLORS.grid);
   doc.setLineWidth(0.22);
   doc.rect(x, y, width, height);
   doc.setLineWidth(0.14);
   doc.line(splitX, y, splitX, y + height);
-  doc.line(x, y + rowH, x + width, y + rowH);
-  doc.line(x, y + rowH * 2, x + width, y + rowH * 2);
-
-  const rows = [
-    ["Subtotal", formatCurrency(totals.subtotal)],
-    [`GST (${formatPercent(totals.gstRate)})`, formatCurrency(totals.gst)],
-    ["Final Amount", formatCurrency(totals.grand)],
-  ];
+  for (let index = 1; index < rows.length; index += 1) {
+    doc.line(x, y + rowH * index, x + width, y + rowH * index);
+  }
 
   rows.forEach(([label, amount], index) => {
     const baseline = y + 5.75 + index * rowH;
@@ -1116,6 +1106,7 @@ function drawSummaryTable(doc, y, roomTotals, totals, fontFamily) {
   const rowH = 9.88;
   const rows = [
     ...Array.from(roomTotals.entries()).map(([room, total]) => [String(room).toUpperCase(), formatCurrency(total)]),
+    ["NET TAXABLE", formatCurrency(totals.taxableSubtotal)],
     [`GST (${formatPercent(totals.gstRate)})`, formatCurrency(totals.gst)],
     ["FINAL AMOUNT", formatCurrency(totals.grand)],
   ];
@@ -1149,11 +1140,11 @@ function drawSummaryTable(doc, y, roomTotals, totals, fontFamily) {
 }
 
 function drawSummaryAndTotals(doc, y, roomTotals, globalTotals, fontFamily) {
-  const { subtotal, gstAmount: gst, grandTotal: grand, gstRate } = globalTotals;
-  const totals = { subtotal, gst, grand, gstRate };
+  const { subtotal, discountAmount, taxableSubtotal, gstAmount: gst, grandTotal: grand, gstRate } = globalTotals;
+  const totals = { subtotal, discountAmount, taxableSubtotal, gst, grand, gstRate };
 
   // Keep summary + subtotal/gst/final-amount together as one non-breaking block.
-  const summaryRows = roomTotals.size + 1;
+  const summaryRows = roomTotals.size + 3;
   const summaryHeaderH = 9.88;
   const summaryRowH = 9.88;
   const summaryHeight = summaryHeaderH + summaryRows * summaryRowH + 4;
@@ -1253,7 +1244,7 @@ async function loadReferenceAssets(options) {
     branding ? resolveStaticImage(aquantLogoUrl) : Promise.resolve(null),
     branding ? resolveStaticImage(kohlerLogoUrl) : Promise.resolve(null),
     branding ? resolveStaticImage(plumberLogoUrl) : Promise.resolve(null),
-    branding ? resolveStaticImage(shreejiWatermarkUrl) : Promise.resolve(null),
+    branding ? resolveStaticImage(options.watermarkUrl || options.watermark || shreejiWatermarkUrl) : Promise.resolve(null),
   ]);
 
   const watermark = branding ? await softenWatermarkAsset(rawWatermark) : null;
@@ -1277,12 +1268,17 @@ export async function generateQuotationPDF(data, options = {}) {
   // Filter out any null/undefined items
   const safeProducts = (Array.isArray(rawProducts) ? rawProducts : []).filter(p => p);
 
+  // Read GST enable flag from options/input; default to true
+  const rawGstRate = Math.max(0, coerceNumber(options.gstRate ?? input.gstRate ?? GST_RATE) || GST_RATE);
+  const gstEnabled = options.gstEnabled ?? input.gst_enabled ?? input.gstEnabled ?? true;
   const mergedOptions = {
     preview: Boolean(options.preview),
     download: Boolean(options.download),
     branding: options.branding ?? input.branding ?? true,
     previewTarget: options.previewTarget,
-    gstRate: Math.max(0, coerceNumber(options.gstRate ?? input.gstRate ?? GST_RATE) || GST_RATE),
+    gstEnabled: Boolean(gstEnabled),
+    // if GST is disabled, force gstRate to 0 so totals respect the checkbox
+    gstRate: Boolean(gstEnabled) ? rawGstRate : 0,
     logo: options.logo || input.logo || input.logoDataUrl,
     logoUrl: options.logoUrl || input.logoUrl,
     publicAssetBase: options.publicAssetBase || input.publicAssetBase || DEFAULT_PUBLIC_ASSET_BASE,

@@ -59,13 +59,12 @@ function CreateBomPage({ workspace, clients = [], onOpenList, onOpenClients }) {
   }, [saveDraft]);
 
   const discountValueLabel =
-    draft.discountType === "item-wise"
-      ? "Default Disc %"
-      : draft.discountType === "common-percentage"
+    draft.discountType === "common-percentage"
       ? "Common %"
       : draft.discountType === "on-total"
       ? "On-total amount"
       : "Discount value";
+  const showDiscountValueField = draft.discountType !== "item-wise";
 
   return (
     <>
@@ -405,25 +404,27 @@ function CreateBomPage({ workspace, clients = [], onOpenList, onOpenClients }) {
                 ))}
               </div>
 
-              <div className="field-grid two-up">
-                <label className="field-shell">
-                  <span>{discountValueLabel}</span>
-                  <input
-                    className="soft-input"
-                    type="number"
-                    min="0"
-                    max={draft.discountType === "common-percentage" ? "100" : undefined}
-                    value={draft.discountValue}
-                    onChange={(event) =>
-                      updateDraftField(
-                        "discountValue",
-                        draft.discountType === "common-percentage"
-                          ? Math.min(100, Math.max(0, Number(event.target.value) || 0))
-                          : Math.max(0, Number(event.target.value) || 0)
-                      )
-                    }
-                  />
-                </label>
+              <div className={showDiscountValueField ? "field-grid two-up" : "field-grid one-up"}>
+                {showDiscountValueField ? (
+                  <label className="field-shell">
+                    <span>{discountValueLabel}</span>
+                    <input
+                      className="soft-input"
+                      type="number"
+                      min="0"
+                      max={draft.discountType === "common-percentage" ? "100" : undefined}
+                      value={draft.discountValue}
+                      onChange={(event) =>
+                        updateDraftField(
+                          "discountValue",
+                          draft.discountType === "common-percentage"
+                            ? Math.min(100, Math.max(0, Number(event.target.value) || 0))
+                            : Math.max(0, Number(event.target.value) || 0)
+                        )
+                      }
+                    />
+                  </label>
+                ) : null}
 
                 <label className="switch-row compact">
                   <span>PDF branding and watermark</span>
