@@ -666,6 +666,103 @@ textarea {
   background: var(--bg-soft);
   border: 1px solid rgba(21, 88, 79, 0.08);
 }
+.room-bar {
+  margin-bottom: 18px;
+  padding: 16px;
+  border-radius: 22px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(250, 246, 239, 0.96));
+  border: 1px solid rgba(21, 88, 79, 0.08);
+  box-shadow: var(--shadow-soft);
+}
+.room-bar-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+.room-bar-head strong {
+  display: block;
+  color: var(--text);
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 0.98rem;
+}
+.room-bar-head span {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-soft);
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+.room-apply-button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.room-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.room-chip {
+  border: 1px solid rgba(21, 88, 79, 0.14);
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 9px 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.16s ease, background-color 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+}
+.room-chip:hover {
+  transform: translateY(-1px);
+  border-color: rgba(21, 88, 79, 0.28);
+}
+.room-chip.is-active {
+  background: rgba(21, 88, 79, 0.12);
+  border-color: rgba(21, 88, 79, 0.38);
+  color: var(--accent-strong);
+  box-shadow: 0 8px 18px rgba(26, 41, 37, 0.08);
+}
+.room-bar-footer {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: minmax(240px, 340px) auto;
+  gap: 14px;
+  align-items: end;
+}
+.room-select-shell {
+  min-width: 0;
+}
+.room-select {
+  min-height: 44px;
+  border-radius: 14px;
+  border-color: rgba(21, 88, 79, 0.16);
+  background: rgba(255, 255, 255, 0.98);
+}
+.room-select-inline {
+  min-height: 38px;
+  padding: 8px 12px;
+  font-size: 0.9rem;
+}
+.room-stat {
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(21, 88, 79, 0.06);
+  border: 1px solid rgba(21, 88, 79, 0.08);
+  min-width: 180px;
+}
+.room-stat strong {
+  display: block;
+  color: var(--accent-strong);
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 1.1rem;
+}
+.room-stat span {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-soft);
+  font-size: 0.82rem;
+}
 
 .discount-config {
   display: flex;
@@ -798,6 +895,7 @@ textarea {
   display: inline-flex;
   gap: 6px;
   padding: 5px;
+}
 
 /* WhatsApp share button (single-button flow) */
 .whatsapp-btn {
@@ -867,9 +965,6 @@ textarea {
   background: #fef2f2;
   color: #dc2626;
   border: 1px solid #fecaca;
-}
-  border-radius: 16px;
-  background: rgba(21, 88, 79, 0.08);
 }
 
 .segment,

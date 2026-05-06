@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
-import { formatDateForInput, PUBLIC_ASSET_BASE_URL } from "../lib/constants";
+import { formatDateForInput, PUBLIC_ASSET_BASE_URL, roomOptions } from "../lib/constants";
 import {
   fetchAutocompleteSuggestions,
   fetchQuotationProposalNumber,
@@ -62,6 +62,10 @@ function createEmptyDraft(proposalNo = "") {
   };
 }
 
+function getDefaultRoom() {
+  return roomOptions.find((room) => room === "Kitchen") || roomOptions[0] || "";
+}
+
 function buildDownloadFileName(quote) {
   const proposal = String(quote?.proposal_no || "quotation")
     .replace(/[^a-z0-9_.-]+/gi, "_")
@@ -112,6 +116,7 @@ function downloadBlob(blob, fileName) {
 
 export function useBomWorkspace({ clients, onQuoteSaved, notify, showPdfModal }) {
   const [draft, setDraft] = useState(() => createEmptyDraft(""));
+  const [activeRoom, setActiveRoom] = useState(() => getDefaultRoom());
   const [query, setQuery] = useState("");
   const [catalogFilter, setCatalogFilter] = useState("all");
   const [suggestions, setSuggestions] = useState([]);
@@ -149,6 +154,7 @@ export function useBomWorkspace({ clients, onQuoteSaved, notify, showPdfModal })
     try {
       const proposalNo = await requestFreshProposalNumber();
       setDraft(createEmptyDraft(proposalNo));
+      setActiveRoom(getDefaultRoom());
       setQuery("");
       setSuggestions([]);
       setCatalogFilter("all");
@@ -256,23 +262,29 @@ export function useBomWorkspace({ clients, onQuoteSaved, notify, showPdfModal })
     (nextItem, sourceLabel = "Product added") => {
       let duplicateMessage = "";
       let successMessage = "";
+      const selectedRoom = String(activeRoom || nextItem.roomName || "").trim();
+      const itemToAdd = selectedRoom ? { ...nextItem, roomName: selectedRoom } : nextItem;
 
       setDraft((prev) => {
-        const nextKey = normalizeItemKey(nextItem.productCode, nextItem.productName);
+        const nextKey = normalizeItemKey(itemToAdd.productCode, itemToAdd.productName);
         const existingIndex = prev.items.findIndex((item) => item.productKey === nextKey);
 
         if (existingIndex >= 0) {
           const updatedItems = prev.items.map((item, index) =>
             index === existingIndex
-              ? { ...item, qty: sanitizeNumber(item.qty, 1) + sanitizeNumber(nextItem.qty, 1) }
+              ? {
+                  ...item,
+                  qty: sanitizeNumber(item.qty, 1) + sanitizeNumber(itemToAdd.qty, 1),
+                  roomName: String(item.roomName || selectedRoom || "").trim(),
+                }
               : item
           );
-          duplicateMessage = `${nextItem.productName} already existed in this quotation, so the quantity was increased instead of adding a duplicate row.`;
+          duplicateMessage = `${itemToAdd.productName} already existed in this quotation, so the quantity was increased instead of adding a duplicate row.`;
           return { ...prev, items: updatedItems };
         }
 
-        successMessage = `${nextItem.productName} is ready in the quotation table.`;
-        return { ...prev, items: [...prev.items, nextItem] };
+        successMessage = `${itemToAdd.productName} is ready in the quotation table.`;
+        return { ...prev, items: [...prev.items, itemToAdd] };
       });
 
       if (duplicateMessage) {
@@ -292,7 +304,7 @@ export function useBomWorkspace({ clients, onQuoteSaved, notify, showPdfModal })
       setQuery("");
       setSuggestions([]);
     },
-    [notify]
+    [activeRoom, notify]
   );
 
   const addSuggestionToDraft = useCallback(
@@ -338,6 +350,29 @@ export function useBomWorkspace({ clients, onQuoteSaved, notify, showPdfModal })
       }),
     }));
   }, []);
+
+  const applyActiveRoomToAllItems = useCallback(() => {
+    const roomName = String(activeRoom || "").trim();
+    if (!roomName) {
+      notify?.({
+        tone: "warning",
+        title: "Select a room first",
+        message: "Choose a current room before applying it to existing products.",
+      });
+      return;
+    }
+
+    setDraft((prev) => ({
+      ...prev,
+      items: prev.items.map((item) => ({ ...item, roomName })),
+    }));
+
+    notify?.({
+      tone: "success",
+      title: "Room applied to all rows",
+      message: `${roomName} has been applied to every existing product row.`,
+    });
+  }, [activeRoom, notify]);
 
   const removeItem = useCallback((rowId) => {
     setDraft((prev) => {
@@ -551,6 +586,9 @@ export function useBomWorkspace({ clients, onQuoteSaved, notify, showPdfModal })
       if (mode === "duplicate") {
         const nextProposalNo = await requestFreshProposalNumber();
         const duplicated = mapQuoteToWorkspace(quote);
+        const initialRoom =
+          (Array.isArray(duplicated.items) ? duplicated.items : []).find((item) => String(item?.roomName || "").trim())
+            ?.roomName || getDefaultRoom();
         // Ensure all array fields are initialized
         setDraft({
           ...duplicated,
@@ -560,6 +598,7 @@ export function useBomWorkspace({ clients, onQuoteSaved, notify, showPdfModal })
           status: "draft",
           items: Array.isArray(duplicated.items) ? duplicated.items : [],
         });
+        setActiveRoom(initialRoom);
         notify?.({
           tone: "success",
           title: "Quotation duplicated",
@@ -569,17 +608,24 @@ export function useBomWorkspace({ clients, onQuoteSaved, notify, showPdfModal })
       }
 
       const loadedDraft = mapQuoteToWorkspace(quote);
+      const initialRoom =
+        (Array.isArray(loadedDraft.items) ? loadedDraft.items : []).find((item) => String(item?.roomName || "").trim())
+          ?.roomName || getDefaultRoom();
       // Ensure all array fields are initialized when loading
       setDraft({
         ...loadedDraft,
         items: Array.isArray(loadedDraft.items) ? loadedDraft.items : [],
       });
+      setActiveRoom(initialRoom);
     },
     [notify, requestFreshProposalNumber]
   );
 
   return {
     draft,
+    activeRoom,
+    setActiveRoom,
+    applyActiveRoomToAllItems,
     quoteTotals,
     subtotal: quoteTotals.subtotal,
     discountAmount: quoteTotals.discountAmount,

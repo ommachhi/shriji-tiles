@@ -16,6 +16,9 @@ import { SharePanel } from "../components/SharePanel";
 function CreateBomPage({ workspace, clients = [], onOpenList, onOpenClients }) {
   const {
     draft,
+    activeRoom,
+    setActiveRoom,
+    applyActiveRoomToAllItems,
     subtotal,
     discountAmount,
     taxableSubtotal,
@@ -65,6 +68,7 @@ function CreateBomPage({ workspace, clients = [], onOpenList, onOpenClients }) {
       ? "On-total amount"
       : "Discount value";
   const showDiscountValueField = draft.discountType !== "item-wise";
+  const activeRoomItemCount = draft.items.filter((item) => String(item.roomName || "") === String(activeRoom || "")).length;
 
   return (
     <>
@@ -442,6 +446,63 @@ function CreateBomPage({ workspace, clients = [], onOpenList, onOpenClients }) {
             title="Quotation items"
             subtitle="Adding the same product again updates quantity instead of creating a duplicate row."
           >
+            <div className="room-bar">
+              <div className="room-bar-head">
+                <div>
+                  <strong>Current Room</strong>
+                  <span>Newly added products will inherit this room automatically.</span>
+                </div>
+                <button
+                  type="button"
+                  className="btn-secondary room-apply-button"
+                  onClick={() => applyActiveRoomToAllItems()}
+                  disabled={draft.items.length === 0}
+                >
+                  Apply Current Room To All Existing Products
+                </button>
+              </div>
+
+              <div className="room-chip-row" role="tablist" aria-label="Current working room">
+                {roomOptions.map((roomName) => {
+                  const isActive = activeRoom === roomName;
+                  return (
+                    <button
+                      key={roomName}
+                      type="button"
+                      role="tab"
+                      aria-selected={isActive}
+                      className={isActive ? "room-chip is-active" : "room-chip"}
+                      onClick={() => setActiveRoom(roomName)}
+                    >
+                      {roomName}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="room-bar-footer">
+                <label className="field-shell room-select-shell">
+                  <span>Selected room</span>
+                  <select
+                    className="soft-input room-select"
+                    value={activeRoom}
+                    onChange={(event) => setActiveRoom(event.target.value)}
+                  >
+                    {roomOptions.map((roomName) => (
+                      <option key={roomName} value={roomName}>
+                        {roomName}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <div className="room-stat">
+                  <strong>{activeRoomItemCount}</strong>
+                  <span>items already use this room</span>
+                </div>
+              </div>
+            </div>
+
             <div className="table-shell">
               <table className="data-table quote-table">
                 <thead>
@@ -493,7 +554,7 @@ function CreateBomPage({ workspace, clients = [], onOpenList, onOpenClients }) {
                         </td>
                         <td>
                           <select
-                            className="table-input"
+                            className="table-input room-select room-select-inline"
                             value={item.roomName}
                             onChange={(event) => updateItem(item.rowId, "roomName", event.target.value)}
                           >
