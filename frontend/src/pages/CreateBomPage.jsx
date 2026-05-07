@@ -389,58 +389,7 @@ function CreateBomPage({ workspace, clients = [], onOpenList, onOpenClients }) {
             ) : null}
           </PanelCard>
 
-          <PanelCard
-            title="Discount configuration"
-            subtitle="Choose one mode only. Room selection is required for every item before save or PDF."
-          >
-            <div className="discount-config">
-              <div className="discount-mode-grid">
-                {discountTypeOptions.map((option) => (
-                  <button
-                    key={option.id}
-                    type="button"
-                    className={draft.discountType === option.id ? "discount-mode is-active" : "discount-mode"}
-                    onClick={() => updateDraftField("discountType", option.id)}
-                  >
-                    <strong>{option.label}</strong>
-                    <span>{option.helper}</span>
-                  </button>
-                ))}
-              </div>
-
-              <div className={showDiscountValueField ? "field-grid two-up" : "field-grid one-up"}>
-                {showDiscountValueField ? (
-                  <label className="field-shell">
-                    <span>{discountValueLabel}</span>
-                    <input
-                      className="soft-input"
-                      type="number"
-                      min="0"
-                      max={draft.discountType === "common-percentage" ? "100" : undefined}
-                      value={draft.discountValue}
-                      onChange={(event) =>
-                        updateDraftField(
-                          "discountValue",
-                          draft.discountType === "common-percentage"
-                            ? Math.min(100, Math.max(0, Number(event.target.value) || 0))
-                            : Math.max(0, Number(event.target.value) || 0)
-                        )
-                      }
-                    />
-                  </label>
-                ) : null}
-
-                <label className="switch-row compact">
-                  <span>PDF branding and watermark</span>
-                  <input
-                    type="checkbox"
-                    checked={draft.watermark}
-                    onChange={(event) => updateDraftField("watermark", event.target.checked)}
-                  />
-                </label>
-              </div>
-            </div>
-          </PanelCard>
+          {/* Discount configuration moved below Quotation items as requested */}
 
           <PanelCard
             title="Quotation items"
@@ -618,6 +567,59 @@ function CreateBomPage({ workspace, clients = [], onOpenList, onOpenClients }) {
                   )}
                 </tbody>
               </table>
+            </div>
+          </PanelCard>
+
+          <PanelCard
+            title="Discount configuration"
+            subtitle="Choose one mode only. Room selection is required for every item before save or PDF."
+          >
+            <div className="discount-config">
+              <div className="discount-mode-grid">
+                {discountTypeOptions.map((option) => (
+                  <button
+                    key={option.id}
+                    type="button"
+                    className={draft.discountType === option.id ? "discount-mode is-active" : "discount-mode"}
+                    onClick={() => updateDraftField("discountType", option.id)}
+                  >
+                    <strong>{option.label}</strong>
+                    <span>{option.helper}</span>
+                  </button>
+                ))}
+              </div>
+
+              <div className={showDiscountValueField ? "field-grid two-up" : "field-grid one-up"}>
+                {showDiscountValueField ? (
+                  <label className="field-shell">
+                    <span>{discountValueLabel}</span>
+                    <input
+                      className="soft-input"
+                      type="number"
+                      min="0"
+                      max={draft.discountType === "common-percentage" ? "100" : undefined}
+                      value={draft.discountValue}
+                      onChange={(event) =>
+                        updateDraftField(
+                          "discountValue",
+                          draft.discountType === "common-percentage"
+                            ? Math.min(100, Math.max(0, Number(event.target.value) || 0))
+                            : Math.max(0, Number(event.target.value) || 0)
+                        )
+                      }
+                    />
+                  </label>
+                ) : null}
+
+                <label className="switch-row compact">
+                  <span>PDF branding and watermark</span>
+                  <input
+                    type="checkbox"
+                    checked={draft.watermark}
+                    onChange={(event) => updateDraftField("watermark", event.target.checked)}
+                  />
+                </label>
+              </div>
             </div>
           </PanelCard>
 
